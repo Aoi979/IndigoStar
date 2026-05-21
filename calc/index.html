@@ -1,0 +1,1653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CUDA Occupancy Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'cuda-dark': '#0f172a',
+            'cuda-panel': '#1e293b',
+            'cuda-border': '#334155',
+            'cuda-accent': '#06b6d4',
+            'cuda-accent-dim': '#0891b2',
+            'cuda-green': '#10b981',
+            'cuda-yellow': '#f59e0b',
+            'cuda-red': '#ef4444',
+            'cuda-purple': '#8b5cf6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background: #0b0f19;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    .glass-panel {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(51, 65, 85, 0.5);
+      border-radius: 12px;
+    }
+    .slider-track {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: #334155;
+      border-radius: 3px;
+      outline: none;
+    }
+    .slider-track::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      background: #06b6d4;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid #0f172a;
+      box-shadow: 0 0 10px rgba(6,182,212,0.4);
+      transition: transform 0.15s;
+    }
+    .slider-track::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+    .gauge-container {
+      position: relative;
+      width: 200px;
+      height: 200px;
+    }
+    .gauge-bg {
+      fill: none;
+      stroke: #334155;
+      stroke-width: 12;
+    }
+    .gauge-fill {
+      fill: none;
+      stroke-width: 12;
+      stroke-linecap: round;
+      transition: stroke-dasharray 0.6s ease, stroke 0.3s ease;
+    }
+    .limit-bar-bg {
+      background: #1e293b;
+      border-radius: 6px;
+      height: 24px;
+      overflow: hidden;
+      position: relative;
+    }
+    .limit-bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      transition: width 0.5s ease;
+    }
+    .sm-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 4px;
+    }
+    .sm-cell {
+      aspect-ratio: 1;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .sm-cell.active {
+      background: rgba(6,182,212,0.2);
+      border: 1px solid #06b6d4;
+      color: #06b6d4;
+    }
+    .sm-cell.inactive {
+      background: rgba(51,65,85,0.3);
+      border: 1px solid transparent;
+      color: #64748b;
+    }
+    .sm-cell.limit {
+      background: rgba(239,68,68,0.15);
+      border: 1px solid #ef4444;
+      color: #ef4444;
+    }
+    .kpi-card {
+      background: linear-gradient(135deg, rgba(30,41,59,0.8), rgba(15,23,42,0.8));
+      border: 1px solid rgba(51,65,85,0.5);
+      border-radius: 12px;
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #06b6d4, #8b5cf6);
+      opacity: 0.7;
+    }
+    .param-group {
+      margin-bottom: 20px;
+    }
+    .param-label {
+      font-size: 12px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .param-value {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 14px;
+      color: #06b6d4;
+      font-weight: 600;
+    }
+    select, input[type="number"] {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      padding: 8px 12px;
+      width: 100%;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    select:focus, input[type="number"]:focus {
+      border-color: #06b6d4;
+    }
+    .param-number-input {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #06b6d4;
+      padding: 5px 8px;
+      width: 68px;
+      font-size: 13px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-weight: 600;
+      text-align: right;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .param-number-input:focus {
+      border-color: #06b6d4;
+      box-shadow: 0 0 0 2px rgba(6,182,212,0.15);
+    }
+    .param-number-input::-webkit-outer-spin-button,
+    .param-number-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .param-number-input[type=number] {
+      -moz-appearance: textfield;
+    }
+    .heatmap-canvas {
+      width: 100%;
+      height: 300px;
+      border-radius: 8px;
+      background: #0f172a;
+    }
+    .compare-card {
+      border-left: 3px solid transparent;
+      transition: all 0.3s;
+    }
+    .compare-card.active {
+      border-left-color: #06b6d4;
+      background: rgba(6,182,212,0.05);
+    }
+    .table-container {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      color: #94a3b8;
+      font-weight: 500;
+      border-bottom: 1px solid #334155;
+      white-space: nowrap;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(51,65,85,0.3);
+      white-space: nowrap;
+    }
+    tr:hover td {
+      background: rgba(6,182,212,0.05);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-cyan { background: rgba(6,182,212,0.15); color: #06b6d4; }
+    .badge-green { background: rgba(16,185,129,0.15); color: #10b981; }
+    .badge-yellow { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .badge-red { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .badge-purple { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+    .chart-container {
+      position: relative;
+      height: 280px;
+    }
+    .scroll-hide::-webkit-scrollbar { width: 6px; }
+    .scroll-hide::-webkit-scrollbar-track { background: transparent; }
+    .scroll-hide::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    .animate-pulse-slow {
+      animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+  <!-- Header -->
+  <header class="border-b border-cuda-border bg-cuda-dark/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-cuda-accent to-cuda-purple flex items-center justify-center">
+          <i class="fa-solid fa-microchip text-white text-lg"></i>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-white tracking-tight">CUDA Occupancy Calculator</h1>
+          <p class="text-xs text-slate-400">Interactive GPU Multiprocessor Occupancy Analyzer</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="resetParams()" class="px-4 py-2 rounded-lg bg-cuda-panel border border-cuda-border text-sm text-slate-300 hover:text-white hover:border-cuda-accent transition">
+          <i class="fa-solid fa-rotate-left mr-2"></i>Reset
+        </button>
+        <button onclick="toggleAutoApply()" id="autoApplyBtn" class="px-4 py-2 rounded-lg bg-cuda-accent/10 border border-cuda-accent/30 text-sm text-cuda-accent hover:bg-cuda-accent/20 transition">
+          <i class="fa-solid fa-bolt mr-2"></i>Auto Apply: ON
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="max-w-[1600px] mx-auto px-6 py-6 flex gap-6">
+    <!-- Left Sidebar: Controls -->
+    <aside class="w-80 shrink-0">
+      <div class="glass-panel p-5 sticky top-24">
+        <h2 class="text-sm font-semibold text-white mb-5 flex items-center gap-2">
+          <i class="fa-solid fa-sliders text-cuda-accent"></i> Kernel Parameters
+        </h2>
+
+        <div class="param-group">
+          <div class="param-label">
+            <span>Compute Capability</span>
+          </div>
+          <select id="ccSelect">
+            <option value="3.5">3.5 (Kepler)</option>
+            <option value="3.7">3.7 (Kepler)</option>
+            <option value="5.0">5.0 (Maxwell)</option>
+            <option value="5.2">5.2 (Maxwell)</option>
+            <option value="6.0">6.0 (Pascal)</option>
+            <option value="6.1">6.1 (Pascal)</option>
+            <option value="6.2">6.2 (Pascal)</option>
+            <option value="7.0">7.0 (Volta)</option>
+            <option value="7.5">7.5 (Turing)</option>
+            <option value="8.0" selected>8.0 (Ampere A100)</option>
+            <option value="8.6">8.6 (Ampere RTX 30)</option>
+            <option value="8.9">8.9 (Ada RTX 40)</option>
+            <option value="9.0">9.0 (Hopper H100)</option>
+            <option value="10.0">10.0 (Blackwell GB200/B200)</option>
+            <option value="10.1">10.1 (Blackwell sm_101)</option>
+            <option value="12.0">12.0 (Blackwell RTX 50/PRO)</option>
+            <option value="12.1">12.1 (Blackwell GB10)</option>
+          </select>
+        </div>
+
+        <div class="param-group">
+          <div class="param-label">
+            <span>Threads Per Block</span>
+            <span class="param-value" id="threadsVal">256</span>
+          </div>
+          <div class="space-y-2">
+            <div class="flex justify-end">
+              <input type="number" id="threadsInput" class="param-number-input" min="1" max="1024" value="256" step="1">
+            </div>
+            <input type="range" id="threadsSlider" class="slider-track w-full" min="1" max="1024" value="256" step="1">
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+            <span>1</span>
+            <span>512</span>
+            <span>1024</span>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-label">
+            <span>Registers Per Thread</span>
+            <span class="param-value" id="regsVal">128</span>
+          </div>
+          <div class="space-y-2">
+            <div class="flex justify-end">
+              <input type="number" id="regsInput" class="param-number-input" min="0" max="255" value="128" step="1">
+            </div>
+            <input type="range" id="regsSlider" class="slider-track w-full" min="0" max="255" value="128" step="1">
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+            <span>0</span>
+            <span>128</span>
+            <span>255</span>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-label">
+            <span>Shared Memory / Block (bytes)</span>
+            <span class="param-value" id="smemVal">65536</span>
+          </div>
+          <div class="space-y-2">
+            <div class="flex justify-end">
+              <input type="number" id="smemInput" class="param-number-input" min="0" max="233472" value="65536" step="128">
+            </div>
+            <input type="range" id="smemSlider" class="slider-track w-full" min="0" max="233472" value="65536" step="128">
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+            <span>0</span>
+            <span>116K</span>
+            <span id="smemMaxLabel">233K</span>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-label">
+            <span>Block Barriers</span>
+            <span class="param-value" id="barriersVal">1</span>
+          </div>
+          <div class="space-y-2">
+            <div class="flex justify-end">
+              <input type="number" id="barriersInput" class="param-number-input" min="1" max="16" value="1" step="1">
+            </div>
+            <input type="range" id="barriersSlider" class="slider-track w-full" min="1" max="16" value="1" step="1">
+          </div>
+        </div>
+
+        <div class="mt-6 pt-5 border-t border-cuda-border">
+          <button onclick="applyPreset('a100_256_128_64k')" class="w-full mb-2 px-3 py-2 rounded-lg bg-cuda-panel border border-cuda-border text-xs text-slate-300 hover:border-cuda-accent hover:text-white transition text-left">
+            <i class="fa-solid fa-rocket mr-2 text-cuda-accent"></i>A100: 256 threads, 128 regs, 64K smem
+          </button>
+          <button onclick="applyPreset('a100_1024_32_0')" class="w-full mb-2 px-3 py-2 rounded-lg bg-cuda-panel border border-cuda-border text-xs text-slate-300 hover:border-cuda-accent hover:text-white transition text-left">
+            <i class="fa-solid fa-rocket mr-2 text-cuda-accent"></i>A100: 1024 threads, 32 regs, 0 smem
+          </button>
+          <button onclick="applyPreset('h100_256_64_32k')" class="w-full px-3 py-2 rounded-lg bg-cuda-panel border border-cuda-border text-xs text-slate-300 hover:border-cuda-accent hover:text-white transition text-left">
+            <i class="fa-solid fa-rocket mr-2 text-cuda-accent"></i>H100: 256 threads, 64 regs, 32K smem
+          </button>
+        </div>
+
+        <!-- A/B Compare -->
+        <div class="mt-6 pt-5 border-t border-cuda-border">
+          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <i class="fa-solid fa-code-compare text-cuda-accent"></i> A/B Compare
+          </h3>
+          <div class="space-y-2">
+            <div id="compareA" class="compare-card active px-3 py-2 rounded-lg bg-cuda-panel border border-cuda-border">
+              <div class="flex justify-between items-center">
+                <span class="text-xs font-semibold text-cuda-accent">Config A</span>
+                <button onclick="saveCompare('A')" class="text-[10px] px-2 py-0.5 rounded bg-cuda-accent/10 text-cuda-accent hover:bg-cuda-accent/20 transition">Save Current</button>
+              </div>
+              <div class="text-[10px] text-slate-400 mt-1 font-mono" id="compareADetail">--</div>
+            </div>
+            <div id="compareB" class="compare-card px-3 py-2 rounded-lg bg-cuda-panel border border-cuda-border">
+              <div class="flex justify-between items-center">
+                <span class="text-xs font-semibold text-slate-300">Config B</span>
+                <button onclick="saveCompare('B')" class="text-[10px] px-2 py-0.5 rounded bg-cuda-panel text-slate-400 hover:text-white transition">Save Current</button>
+              </div>
+              <div class="text-[10px] text-slate-400 mt-1 font-mono" id="compareBDetail">--</div>
+            </div>
+            <button onclick="toggleCompare()" id="compareToggleBtn" class="w-full py-2 rounded-lg bg-cuda-accent/10 border border-cuda-accent/30 text-xs text-cuda-accent hover:bg-cuda-accent/20 transition">
+              <i class="fa-solid fa-eye mr-1"></i>View Side-by-Side
+            </button>
+          </div>
+        </div>
+
+        <!-- Grid Size Calculator -->
+        <div class="mt-6 pt-5 border-t border-cuda-border">
+          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <i class="fa-solid fa-calculator text-cuda-green"></i> Grid Calculator
+          </h3>
+          <div class="space-y-3">
+            <div>
+              <div class="param-label !mb-1"><span>Total Elements</span></div>
+              <input type="number" id="gridTotalElements" class="param-number-input w-full text-left" value="1048576" min="1">
+            </div>
+            <div>
+              <div class="param-label !mb-1"><span>Elements / Thread</div>
+              <input type="number" id="gridElementsPerThread" class="param-number-input w-full text-left" value="1" min="1">
+            </div>
+            <button onclick="calculateGrid()" class="w-full py-2 rounded-lg bg-cuda-green/10 border border-cuda-green/30 text-xs text-cuda-green hover:bg-cuda-green/20 transition">
+              <i class="fa-solid fa-bolt mr-1"></i>Calculate Grid
+            </button>
+            <div id="gridResult" class="text-[11px] text-slate-400 space-y-1 hidden">
+              <!-- Filled by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 min-w-0">
+      <!-- KPI Cards -->
+      <div class="grid grid-cols-5 gap-4 mb-6">
+        <div class="kpi-card">
+          <div class="text-xs text-slate-400 mb-1">Occupancy</div>
+          <div class="text-3xl font-bold text-white" id="kpiOccupancy">25%</div>
+          <div class="text-xs text-slate-500 mt-1" id="kpiOccupancySub">16 / 64 warps</div>
+        </div>
+        <div class="kpi-card">
+          <div class="text-xs text-slate-400 mb-1">Active Blocks / SM</div>
+          <div class="text-3xl font-bold text-cuda-accent" id="kpiBlocks">2</div>
+          <div class="text-xs text-slate-500 mt-1" id="kpiBlocksSub">max 32</div>
+        </div>
+        <div class="kpi-card">
+          <div class="text-xs text-slate-400 mb-1">Active Warps / SM</div>
+          <div class="text-3xl font-bold text-cuda-green" id="kpiWarps">16</div>
+          <div class="text-xs text-slate-500 mt-1" id="kpiWarpsSub">max 64</div>
+        </div>
+        <div class="kpi-card">
+          <div class="text-xs text-slate-400 mb-1">Active Threads / SM</div>
+          <div class="text-3xl font-bold text-cuda-purple" id="kpiThreads">512</div>
+          <div class="text-xs text-slate-500 mt-1" id="kpiThreadsSub">max 2048</div>
+        </div>
+        <div class="kpi-card relative overflow-hidden" id="kpiBottleneckCard">
+          <div class="absolute top-0 left-0 right-0 h-1 bg-cuda-red"></div>
+          <div class="text-xs text-slate-400 mb-1 flex items-center gap-1">
+            <i class="fa-solid fa-triangle-exclamation text-cuda-red text-[10px]"></i> Bottleneck
+          </div>
+          <div class="text-2xl font-bold text-cuda-red leading-tight" id="kpiBottleneck">Registers</div>
+          <div class="text-xs text-slate-500 mt-1.5" id="kpiBottleneckSub">50% regs idle</div>
+        </div>
+      </div>
+
+      <!-- Top Section: Gauge + Limits + SM Viz -->
+      <div class="grid grid-cols-3 gap-6 mb-6">
+        <!-- Occupancy Gauge -->
+        <div class="glass-panel p-5 flex flex-col items-center justify-center">
+          <h3 class="text-sm font-semibold text-white mb-4 w-full flex items-center gap-2">
+            <i class="fa-solid fa-gauge-high text-cuda-accent"></i> Occupancy
+          </h3>
+          <div class="gauge-container">
+            <svg viewBox="0 0 200 200" width="200" height="200">
+              <circle class="gauge-bg" cx="100" cy="100" r="80" stroke-dasharray="377 502" stroke-dashoffset="0" transform="rotate(135 100 100)"/>
+              <circle id="gaugeFill" class="gauge-fill" cx="100" cy="100" r="80" stroke-dasharray="94.25 502" stroke-dashoffset="0" transform="rotate(135 100 100)" stroke="#06b6d4"/>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-4xl font-bold text-white" id="gaugeText">25%</span>
+              <span class="text-xs text-slate-400 mt-1">Utilization</span>
+            </div>
+          </div>
+          <div class="mt-4 w-full">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <span class="badge badge-cyan" id="gaugeStatus">Low</span>
+              <span class="badge badge-yellow" id="gaugeLimit">Regs Limited</span>
+            </div>
+            <div id="gaugeBottleneckDetail" class="text-center text-xs text-slate-400 px-3 py-2 rounded-lg bg-cuda-red/5 border border-cuda-red/20">
+              <i class="fa-solid fa-lock text-cuda-red mr-1"></i>
+              <span id="gaugeBottleneckText">Register usage limits active blocks to 2</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Limiting Factors -->
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-triangle-exclamation text-cuda-yellow"></i> Limiting Factors
+          </h3>
+          <div class="space-y-4" id="limitFactors">
+            <!-- Filled by JS -->
+          </div>
+        </div>
+
+        <!-- SM Warp Visualization -->
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-border-all text-cuda-purple"></i> SM Warp Slots
+          </h3>
+          <div id="smVizContainer" class="sm-grid">
+            <!-- Filled by JS -->
+          </div>
+          <div class="flex gap-4 mt-4 text-xs">
+            <div class="flex items-center gap-1.5">
+              <div class="w-3 h-3 rounded-sm bg-cuda-accent/20 border border-cuda-accent"></div>
+              <span class="text-slate-400">Active</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <div class="w-3 h-3 rounded-sm bg-slate-700/30 border border-transparent"></div>
+              <span class="text-slate-400">Idle</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <div class="w-3 h-3 rounded-sm bg-cuda-red/15 border border-cuda-red"></div>
+              <span class="text-slate-400">Limit</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Resource Utilization Bars -->
+      <div class="glass-panel p-5 mb-6">
+        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-chart-bar text-cuda-green"></i> Resource Utilization per SM
+        </h3>
+        <div class="grid grid-cols-3 gap-6" id="resourceBars">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+
+      <!-- Charts Row -->
+      <div class="grid grid-cols-2 gap-6 mb-6">
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-chart-line text-cuda-accent"></i> Occupancy vs Threads / Block
+          </h3>
+          <div class="chart-container">
+            <canvas id="threadsChart"></canvas>
+          </div>
+        </div>
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-chart-line text-cuda-green"></i> Occupancy vs Registers / Thread
+          </h3>
+          <div class="chart-container">
+            <canvas id="regsChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Optimization Suggestions + Occupancy Heatmap Row -->
+      <div class="grid grid-cols-2 gap-6 mb-6">
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-wand-magic-sparkles text-cuda-yellow"></i> Optimization Suggestions
+          </h3>
+          <div class="space-y-2" id="optimizationSuggestions">
+            <!-- Filled by JS -->
+          </div>
+        </div>
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-fire text-cuda-red"></i> Occupancy Heatmap
+            <span class="text-[10px] text-slate-500 font-normal">Threads × Registers</span>
+          </h3>
+          <canvas id="occupancyHeatmap" class="heatmap-canvas"></canvas>
+          <div class="flex items-center justify-between mt-2 text-[10px] text-slate-500">
+            <span>Low Occupancy</span>
+            <div class="flex-1 mx-2 h-2 rounded-full" style="background: linear-gradient(90deg, #ef4444, #f59e0b, #06b6d4, #10b981);"></div>
+            <span>High Occupancy</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tables Row -->
+      <div class="grid grid-cols-2 gap-6 mb-6">
+        <!-- Allocated Resources -->
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-table-cells text-cuda-accent"></i> Allocated Resources
+          </h3>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Resource</th>
+                  <th>Per Block</th>
+                  <th>Limit / SM</th>
+                  <th>Allocatable Blocks</th>
+                </tr>
+              </thead>
+              <tbody id="allocTable">
+                <!-- Filled by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Physical Limits -->
+        <div class="glass-panel p-5">
+          <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-microchip text-cuda-green"></i> GPU Physical Limits
+          </h3>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th class="text-right">Value</th>
+                </tr>
+              </thead>
+              <tbody id="limitsTable">
+                <!-- Filled by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Occupancy Limiters -->
+      <div class="glass-panel p-5 mb-6">
+        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-filter text-cuda-yellow"></i> Occupancy Limiters
+        </h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Limited By</th>
+                <th class="text-right">Blocks / SM</th>
+                <th class="text-right">Warps / Block</th>
+                <th class="text-right">Warps / SM</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="limitersTable">
+              <!-- Filled by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Resource Waste & What-If Analysis -->
+      <div class="glass-panel p-5 mb-6">
+        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-flask text-cuda-green"></i> Resource Waste & What-If Analysis
+          <span class="text-[10px] text-slate-500 ml-2 font-normal">(Advanced)</span>
+        </h3>
+        <div class="grid grid-cols-2 gap-6">
+          <!-- Left: Resource Waste Breakdown -->
+          <div>
+            <h4 class="text-xs font-medium text-slate-400 mb-3 uppercase tracking-wider">Unused Resources per SM</h4>
+            <div class="space-y-3" id="wasteBars">
+              <!-- Filled by JS -->
+            </div>
+          </div>
+          <!-- Right: What-If Scenarios -->
+          <div>
+            <h4 class="text-xs font-medium text-slate-400 mb-3 uppercase tracking-wider">What-If Scenarios</h4>
+            <div class="space-y-2" id="whatIfTable">
+              <!-- Filled by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Occupancy Data -->
+      <div class="glass-panel p-5">
+        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-list-check text-cuda-purple"></i> Occupancy Data
+        </h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Property</th>
+                <th class="text-right">Value</th>
+              </tr>
+            </thead>
+            <tbody id="occupancyTable">
+              <!-- Filled by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // ===================== GPU Database =====================
+    const gpuDatabase = {
+      "3.5": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 16, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 49152, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 4, name: "Kepler GK110" },
+      "3.7": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 16, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 131072, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 114688, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 4, name: "Kepler GK210" },
+      "5.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 65536, maxSharedMemPerBlock: 65536, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 2, name: "Maxwell GM107" },
+      "5.2": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 32768, maxRegistersPerThread: 255, sharedMemPerSM: 98304, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 2, name: "Maxwell GM200" },
+      "6.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 65536, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 2, name: "Pascal GP100" },
+      "6.1": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 98304, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 2, name: "Pascal GP104" },
+      "6.2": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 65536, maxSharedMemPerBlock: 49152, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 2, name: "Pascal GP10B" },
+      "7.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 98304, maxSharedMemPerBlock: 98304, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 4, name: "Volta GV100" },
+      "7.5": { threadsPerWarp: 32, maxWarpsPerSM: 32, maxBlocksPerSM: 16, maxThreadsPerSM: 1024, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 65536, maxSharedMemPerBlock: 65536, regAllocUnit: 256, smemAllocUnit: 256, warpAllocGranularity: 4, name: "Turing TU102" },
+      "8.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 167936, maxSharedMemPerBlock: 167936, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Ampere GA100" },
+      "8.6": { threadsPerWarp: 32, maxWarpsPerSM: 48, maxBlocksPerSM: 16, maxThreadsPerSM: 1536, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 102400, maxSharedMemPerBlock: 102400, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Ampere GA102/104" },
+      "8.9": { threadsPerWarp: 32, maxWarpsPerSM: 48, maxBlocksPerSM: 24, maxThreadsPerSM: 1536, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 102400, maxSharedMemPerBlock: 102400, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Ada AD102/103/104" },
+      "9.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 233472, maxSharedMemPerBlock: 233472, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Hopper GH100" },
+      "10.0": { threadsPerWarp: 32, maxWarpsPerSM: 64, maxBlocksPerSM: 32, maxThreadsPerSM: 2048, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 233472, maxSharedMemPerBlock: 232448, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Blackwell GB200/B200" },
+      "10.1": { threadsPerWarp: 32, maxWarpsPerSM: 48, maxBlocksPerSM: 24, maxThreadsPerSM: 1536, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 233472, maxSharedMemPerBlock: 232448, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Blackwell sm_101 (已重命名为 sm_110 / Jetson Thor)" },
+      "12.0": { threadsPerWarp: 32, maxWarpsPerSM: 48, maxBlocksPerSM: 24, maxThreadsPerSM: 1536, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 102400, maxSharedMemPerBlock: 101376, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Blackwell RTX 50 / RTX PRO" },
+      "12.1": { threadsPerWarp: 32, maxWarpsPerSM: 48, maxBlocksPerSM: 24, maxThreadsPerSM: 1536, maxThreadBlockSize: 1024, registersPerSM: 65536, maxRegistersPerBlock: 65536, maxRegistersPerThread: 255, sharedMemPerSM: 102400, maxSharedMemPerBlock: 101376, regAllocUnit: 256, smemAllocUnit: 128, warpAllocGranularity: 4, name: "Blackwell GB10 (DGX Spark)" },
+    };
+
+    let autoApply = true;
+    let threadsChart = null;
+    let regsChart = null;
+
+    function getParams() {
+      return {
+        cc: document.getElementById('ccSelect').value,
+        threadsPerBlock: parseInt(document.getElementById('threadsSlider').value),
+        registersPerThread: parseInt(document.getElementById('regsSlider').value),
+        sharedMemPerBlock: parseInt(document.getElementById('smemSlider').value),
+        blockBarriers: parseInt(document.getElementById('barriersSlider').value),
+      };
+    }
+
+    function syncParam(key, val, source) {
+      const numVal = parseInt(val) || 0;
+      document.getElementById(key + 'Val').textContent = key === 'smem' ? numVal.toLocaleString() : numVal;
+      if (source !== 'slider') {
+        const slider = document.getElementById(key + 'Slider');
+        if (slider) slider.value = numVal;
+      }
+      if (source !== 'input') {
+        const input = document.getElementById(key + 'Input');
+        if (input) input.value = numVal;
+      }
+    }
+
+    function bindParam(key, onChange) {
+      const slider = document.getElementById(key + 'Slider');
+      const input = document.getElementById(key + 'Input');
+      if (slider) {
+        slider.addEventListener('input', () => {
+          syncParam(key, slider.value, 'slider');
+          onChange();
+        });
+      }
+      if (input) {
+        input.addEventListener('change', () => {
+          let val = parseInt(input.value) || 0;
+          const min = parseInt(input.min), max = parseInt(input.max);
+          if (val < min) val = min;
+          if (val > max) val = max;
+          syncParam(key, val, 'input');
+          onChange();
+        });
+      }
+    }
+
+    function toggleAutoApply() {
+      autoApply = !autoApply;
+      const btn = document.getElementById('autoApplyBtn');
+      btn.innerHTML = autoApply ? '<i class="fa-solid fa-bolt mr-2"></i>Auto Apply: ON' : '<i class="fa-solid fa-pause mr-2"></i>Auto Apply: OFF';
+      btn.className = autoApply 
+        ? "px-4 py-2 rounded-lg bg-cuda-accent/10 border border-cuda-accent/30 text-sm text-cuda-accent hover:bg-cuda-accent/20 transition"
+        : "px-4 py-2 rounded-lg bg-cuda-panel border border-cuda-border text-sm text-slate-300 hover:text-white transition";
+    }
+
+    function resetParams() {
+      document.getElementById('ccSelect').value = '8.0';
+      syncParam('threads', 256);
+      syncParam('regs', 128);
+      syncParam('smem', 65536);
+      syncParam('barriers', 1);
+      updateSharedMemSliderMax();
+      calculateAndRender();
+    }
+
+    function applyPreset(id) {
+      const presets = {
+        'a100_256_128_64k': { cc: '8.0', threads: 256, regs: 128, smem: 65536 },
+        'a100_1024_32_0': { cc: '8.0', threads: 1024, regs: 32, smem: 0 },
+        'h100_256_64_32k': { cc: '9.0', threads: 256, regs: 64, smem: 32768 },
+      };
+      const p = presets[id];
+      if (!p) return;
+      document.getElementById('ccSelect').value = p.cc;
+      syncParam('threads', p.threads);
+      syncParam('regs', p.regs);
+      syncParam('smem', p.smem);
+      updateSharedMemSliderMax();
+      calculateAndRender();
+    }
+
+    function updateSharedMemSliderMax() {
+      const cc = document.getElementById('ccSelect').value;
+      const gpu = gpuDatabase[cc];
+      const slider = document.getElementById('smemSlider');
+      const input = document.getElementById('smemInput');
+      slider.max = gpu.sharedMemPerSM;
+      if (input) input.max = gpu.sharedMemPerSM;
+      const label = document.getElementById('smemMaxLabel');
+      if (label) label.textContent = formatBytes(gpu.sharedMemPerSM);
+    }
+
+    function formatBytes(v) {
+      if (v >= 1024) return (v/1024).toFixed(0) + 'K';
+      return v.toString();
+    }
+
+    // ===================== Core Calculation =====================
+    function calculateOccupancy(params) {
+      const gpu = gpuDatabase[params.cc];
+      if (!gpu) return null;
+
+      const threadsPerBlock = Math.min(params.threadsPerBlock, gpu.maxThreadBlockSize);
+      const warpsPerBlock = Math.ceil(threadsPerBlock / gpu.threadsPerWarp);
+
+      // Warp limit
+      const blockLimitWarps = Math.floor(gpu.maxWarpsPerSM / warpsPerBlock);
+
+      // Register limit
+      let blockLimitRegs = gpu.maxBlocksPerSM;
+      let regsPerWarp = 0;
+      let allocatedWarps = 0;
+      let regsPerBlock = 0;
+      if (params.registersPerThread > 0) {
+        regsPerWarp = Math.ceil(params.registersPerThread * gpu.threadsPerWarp / gpu.regAllocUnit) * gpu.regAllocUnit;
+        allocatedWarps = Math.ceil(warpsPerBlock / gpu.warpAllocGranularity) * gpu.warpAllocGranularity;
+        regsPerBlock = allocatedWarps * regsPerWarp;
+        blockLimitRegs = Math.floor(gpu.registersPerSM / regsPerBlock);
+      }
+
+      // Shared memory limit
+      let blockLimitSmem = gpu.maxBlocksPerSM;
+      let allocSmem = 0;
+      if (params.sharedMemPerBlock > 0) {
+        allocSmem = Math.ceil(params.sharedMemPerBlock / gpu.smemAllocUnit) * gpu.smemAllocUnit;
+        blockLimitSmem = Math.floor(gpu.sharedMemPerSM / allocSmem);
+      }
+
+      // Barriers limit (not well documented, assume 1 block per barrier for simplicity or ignore)
+      // CUDA generally allows many barriers per block, but blocks per SM may be limited by barrier count.
+      // For simplicity and matching ncu behavior, we don't model this strictly unless needed.
+      const blockLimitBarriers = gpu.maxBlocksPerSM; // Simplified
+
+      const activeBlocks = Math.min(blockLimitWarps, blockLimitRegs, blockLimitSmem, blockLimitBarriers, gpu.maxBlocksPerSM);
+      const activeWarps = activeBlocks * warpsPerBlock;
+      const activeThreads = activeWarps * gpu.threadsPerWarp;
+      const occupancy = (activeWarps / gpu.maxWarpsPerSM) * 100;
+
+      // Determine limiters
+      const limiters = [];
+      if (activeBlocks === blockLimitWarps) limiters.push({ name: 'Max Warps / Max Blocks', blocks: blockLimitWarps, warpsPerBlock, warpsPerSM: blockLimitWarps * warpsPerBlock, limiting: true });
+      else limiters.push({ name: 'Max Warps / Max Blocks', blocks: blockLimitWarps, warpsPerBlock, warpsPerSM: blockLimitWarps * warpsPerBlock, limiting: false });
+
+      if (activeBlocks === blockLimitRegs) limiters.push({ name: 'Registers per Multiprocessor', blocks: blockLimitRegs, warpsPerBlock, warpsPerSM: blockLimitRegs * warpsPerBlock, limiting: true });
+      else limiters.push({ name: 'Registers per Multiprocessor', blocks: blockLimitRegs, warpsPerBlock, warpsPerSM: blockLimitRegs * warpsPerBlock, limiting: false });
+
+      if (activeBlocks === blockLimitSmem) limiters.push({ name: 'Shared Memory per Multiprocessor', blocks: blockLimitSmem, warpsPerBlock, warpsPerSM: blockLimitSmem * warpsPerBlock, limiting: true });
+      else limiters.push({ name: 'Shared Memory per Multiprocessor', blocks: blockLimitSmem, warpsPerBlock, warpsPerSM: blockLimitSmem * warpsPerBlock, limiting: false });
+
+      // Primary limiting factor name
+      let primaryLimiter = '';
+      if (activeBlocks === blockLimitWarps) primaryLimiter = 'Warps';
+      else if (activeBlocks === blockLimitRegs) primaryLimiter = 'Registers';
+      else if (activeBlocks === blockLimitSmem) primaryLimiter = 'Shared Memory';
+      else if (activeBlocks === gpu.maxBlocksPerSM) primaryLimiter = 'Max Blocks';
+
+      return {
+        gpu,
+        params: { ...params, threadsPerBlock, warpsPerBlock },
+        blockLimitWarps,
+        blockLimitRegs,
+        blockLimitSmem,
+        blockLimitBarriers,
+        activeBlocks,
+        activeWarps,
+        activeThreads,
+        occupancy,
+        limiters,
+        primaryLimiter,
+        regsPerWarp,
+        allocatedWarps,
+        regsPerBlock,
+        allocSmem,
+      };
+    }
+
+    function onParamChange() {
+      try {
+        updateSharedMemSliderMax();
+        if (autoApply) calculateAndRender();
+      } catch (e) {
+        console.error('onParamChange error:', e);
+      }
+    }
+
+    // ===================== Rendering =====================
+    function calculateAndRender() {
+      const params = getParams();
+      const result = calculateOccupancy(params);
+      if (!result) return;
+
+      renderKPIs(result);
+      renderGauge(result);
+      renderLimitFactors(result);
+      renderSMViz(result);
+      renderResourceBars(result);
+      renderTables(result);
+      renderWasteAnalysis(result);
+      renderOptimizationSuggestions(result);
+      renderOccupancyHeatmap(result);
+      updateCharts(result);
+    }
+
+    function renderKPIs(r) {
+      document.getElementById('kpiOccupancy').textContent = r.occupancy.toFixed(1) + '%';
+      document.getElementById('kpiOccupancySub').textContent = `${r.activeWarps} / ${r.gpu.maxWarpsPerSM} warps`;
+      document.getElementById('kpiBlocks').textContent = r.activeBlocks;
+      document.getElementById('kpiBlocksSub').textContent = `max ${r.gpu.maxBlocksPerSM}`;
+      document.getElementById('kpiWarps').textContent = r.activeWarps;
+      document.getElementById('kpiWarpsSub').textContent = `max ${r.gpu.maxWarpsPerSM}`;
+      document.getElementById('kpiThreads').textContent = r.activeThreads;
+      document.getElementById('kpiThreadsSub').textContent = `max ${r.gpu.maxThreadsPerSM}`;
+
+      // Bottleneck KPI
+      const bottleneckEl = document.getElementById('kpiBottleneck');
+      const bottleneckSub = document.getElementById('kpiBottleneckSub');
+      const bottleneckCard = document.getElementById('kpiBottleneckCard');
+      if (r.primaryLimiter) {
+        bottleneckEl.textContent = r.primaryLimiter;
+        let wastePct = 0;
+        let wasteDetail = '';
+        if (r.primaryLimiter === 'Registers') {
+          const usedRegs = r.activeBlocks * r.regsPerBlock;
+          wastePct = ((r.gpu.registersPerSM - usedRegs) / r.gpu.registersPerSM * 100).toFixed(0);
+          wasteDetail = `${wastePct}% regs idle`;
+        } else if (r.primaryLimiter === 'Shared Memory') {
+          const usedSmem = r.activeBlocks * r.allocSmem;
+          wastePct = ((r.gpu.sharedMemPerSM - usedSmem) / r.gpu.sharedMemPerSM * 100).toFixed(0);
+          wasteDetail = `${wastePct}% smem idle`;
+        } else if (r.primaryLimiter === 'Warps') {
+          wastePct = ((r.gpu.maxWarpsPerSM - r.activeWarps) / r.gpu.maxWarpsPerSM * 100).toFixed(0);
+          wasteDetail = `${wastePct}% warp slots idle`;
+        } else if (r.primaryLimiter === 'Max Blocks') {
+          wastePct = ((r.gpu.maxBlocksPerSM - r.activeBlocks) / r.gpu.maxBlocksPerSM * 100).toFixed(0);
+          wasteDetail = `${wastePct}% block slots idle`;
+        }
+        bottleneckSub.textContent = wasteDetail;
+        bottleneckCard.querySelector('.absolute').style.background = '#ef4444';
+      } else {
+        bottleneckEl.textContent = 'None';
+        bottleneckSub.textContent = 'All resources utilized';
+        bottleneckCard.querySelector('.absolute').style.background = '#10b981';
+      }
+    }
+
+    function renderGauge(r) {
+      const pct = Math.min(r.occupancy, 100);
+      const circumference = 2 * Math.PI * 80;
+      const maxArc = circumference * 0.75; // 270 degrees
+      const dash = (pct / 100) * maxArc;
+      const fill = document.getElementById('gaugeFill');
+      fill.style.strokeDasharray = `${dash} ${circumference}`;
+      fill.style.strokeDashoffset = '0';
+
+      // Color based on occupancy
+      let color = '#ef4444';
+      if (pct >= 75) color = '#10b981';
+      else if (pct >= 50) color = '#06b6d4';
+      else if (pct >= 25) color = '#f59e0b';
+      fill.style.stroke = color;
+
+      document.getElementById('gaugeText').textContent = pct.toFixed(1) + '%';
+      document.getElementById('gaugeText').style.color = color;
+
+      let status = 'Low';
+      let statusClass = 'badge-red';
+      if (pct >= 75) { status = 'Optimal'; statusClass = 'badge-green'; }
+      else if (pct >= 50) { status = 'Good'; statusClass = 'badge-cyan'; }
+      else if (pct >= 25) { status = 'Fair'; statusClass = 'badge-yellow'; }
+      document.getElementById('gaugeStatus').className = 'badge ' + statusClass;
+      document.getElementById('gaugeStatus').textContent = status;
+
+      document.getElementById('gaugeLimit').textContent = r.primaryLimiter ? r.primaryLimiter + ' Limited' : 'No Limit';
+
+      const bottleneckDetail = document.getElementById('gaugeBottleneckDetail');
+      const bottleneckText = document.getElementById('gaugeBottleneckText');
+      if (r.primaryLimiter) {
+        let detail = '';
+        if (r.primaryLimiter === 'Registers') {
+          detail = `Register usage (${r.params.registersPerThread} per thread) limits active blocks to ${r.activeBlocks}`;
+        } else if (r.primaryLimiter === 'Shared Memory') {
+          detail = `Shared memory (${r.allocSmem.toLocaleString()} bytes/block) limits active blocks to ${r.activeBlocks}`;
+        } else if (r.primaryLimiter === 'Warps') {
+          detail = `Thread block size (${r.params.threadsPerBlock}) uses ${r.params.warpsPerBlock} warps, limiting to ${r.activeBlocks} blocks`;
+        } else if (r.primaryLimiter === 'Max Blocks') {
+          detail = `SM hardware limit caps blocks at ${r.activeBlocks}`;
+        }
+        bottleneckText.textContent = detail;
+        bottleneckDetail.style.display = 'block';
+      } else {
+        bottleneckDetail.style.display = 'none';
+      }
+    }
+
+    function renderLimitFactors(r) {
+      const container = document.getElementById('limitFactors');
+      const factors = [
+        { name: 'Warps per SM', used: r.activeWarps, total: r.gpu.maxWarpsPerSM, limit: r.blockLimitWarps * r.params.warpsPerBlock === r.activeWarps },
+        { name: 'Blocks per SM', used: r.activeBlocks, total: r.gpu.maxBlocksPerSM, limit: r.activeBlocks === r.gpu.maxBlocksPerSM },
+        { name: 'Registers per SM', used: r.activeBlocks * r.regsPerBlock, total: r.gpu.registersPerSM, limit: r.blockLimitRegs === r.activeBlocks && r.params.registersPerThread > 0 },
+        { name: 'Shared Memory per SM', used: r.activeBlocks * r.allocSmem, total: r.gpu.sharedMemPerSM, limit: r.blockLimitSmem === r.activeBlocks && r.params.sharedMemPerBlock > 0 },
+        { name: 'Threads per SM', used: r.activeThreads, total: r.gpu.maxThreadsPerSM, limit: r.activeThreads === r.gpu.maxThreadsPerSM },
+      ];
+
+      container.innerHTML = factors.map(f => {
+        const pct = f.total > 0 ? (f.used / f.total * 100) : 0;
+        const barColor = f.limit ? '#ef4444' : (pct > 80 ? '#06b6d4' : '#10b981');
+        const borderClass = f.limit ? 'border border-cuda-red/30 rounded-lg p-2 bg-cuda-red/5' : '';
+        const icon = f.limit ? '<i class="fa-solid fa-lock text-cuda-red mr-1"></i>' : '<i class="fa-solid fa-check text-cuda-green mr-1"></i>';
+        return `
+          <div class="${borderClass} transition-all">
+            <div class="flex justify-between text-xs mb-1">
+              <span class="${f.limit ? 'text-cuda-red font-semibold' : 'text-slate-300'}">${icon}${f.name}</span>
+              <span class="text-slate-400">${f.used.toLocaleString()} / ${f.total.toLocaleString()}</span>
+            </div>
+            <div class="limit-bar-bg">
+              <div class="limit-bar-fill" style="width: ${Math.min(pct, 100)}%; background: ${barColor};"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderSMViz(r) {
+      const container = document.getElementById('smVizContainer');
+      const totalSlots = r.gpu.maxWarpsPerSM;
+      const active = r.activeWarps;
+      const cols = Math.ceil(Math.sqrt(totalSlots));
+      container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+      let html = '';
+      for (let i = 0; i < totalSlots; i++) {
+        let cls = 'inactive';
+        if (i < active) {
+          cls = 'active';
+        }
+        // Highlight the boundary of the limiting block count
+        if (i === active && active < totalSlots) {
+          cls = 'limit';
+        }
+        const warpNum = i < active ? (i % r.params.warpsPerBlock) + 1 : '';
+        html += `<div class="sm-cell ${cls}">${i < active ? warpNum : (i === active ? '!' : '')}</div>`;
+      }
+      container.innerHTML = html;
+    }
+
+    function renderResourceBars(r) {
+      const container = document.getElementById('resourceBars');
+      const items = [
+        { label: 'Warps', used: r.activeWarps, total: r.gpu.maxWarpsPerSM, unit: '', color: 'bg-cuda-accent' },
+        { label: 'Registers', used: r.activeBlocks * r.regsPerBlock, total: r.gpu.registersPerSM, unit: '', color: 'bg-cuda-green' },
+        { label: 'Shared Memory', used: r.activeBlocks * r.allocSmem, total: r.gpu.sharedMemPerSM, unit: ' bytes', color: 'bg-cuda-purple' },
+      ];
+
+      container.innerHTML = items.map(item => {
+        const pct = item.total > 0 ? (item.used / item.total * 100) : 0;
+        return `
+          <div>
+            <div class="flex justify-between text-xs mb-2">
+              <span class="text-slate-300 font-medium">${item.label}</span>
+              <span class="text-slate-400">${pct.toFixed(1)}%</span>
+            </div>
+            <div class="limit-bar-bg" style="height: 32px;">
+              <div class="limit-bar-fill ${item.color}" style="width: ${Math.min(pct, 100)}%;"></div>
+              <div class="absolute inset-0 flex items-center justify-center text-xs font-mono text-white" style="text-shadow: 0 1px 2px rgba(0,0,0,0.5);">
+                ${item.used.toLocaleString()} / ${item.total.toLocaleString()}${item.unit}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderTables(r) {
+      // Allocated Resources
+      const allocBody = document.getElementById('allocTable');
+      allocBody.innerHTML = `
+        <tr>
+          <td><span class="badge badge-cyan">Warps</span></td>
+          <td class="text-right font-mono">${r.params.warpsPerBlock}</td>
+          <td class="text-right font-mono">${r.gpu.maxWarpsPerSM}</td>
+          <td class="text-right font-mono">${r.blockLimitWarps}</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-green">Registers</span></td>
+          <td class="text-right font-mono">${r.regsPerBlock.toLocaleString()}</td>
+          <td class="text-right font-mono">${r.gpu.registersPerSM.toLocaleString()}</td>
+          <td class="text-right font-mono">${r.blockLimitRegs}</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-purple">Shared Memory</span></td>
+          <td class="text-right font-mono">${r.allocSmem.toLocaleString()}</td>
+          <td class="text-right font-mono">${r.gpu.sharedMemPerSM.toLocaleString()}</td>
+          <td class="text-right font-mono">${r.blockLimitSmem}</td>
+        </tr>
+      `;
+
+      // Physical Limits
+      const limitsBody = document.getElementById('limitsTable');
+      limitsBody.innerHTML = `
+        <tr><td>Threads per Warp</td><td class="text-right font-mono">${r.gpu.threadsPerWarp}</td></tr>
+        <tr><td>Max Warps per Multiprocessor</td><td class="text-right font-mono">${r.gpu.maxWarpsPerSM}</td></tr>
+        <tr><td>Max Thread Blocks per Multiprocessor</td><td class="text-right font-mono">${r.gpu.maxBlocksPerSM}</td></tr>
+        <tr><td>Max Threads per Multiprocessor</td><td class="text-right font-mono">${r.gpu.maxThreadsPerSM}</td></tr>
+        <tr><td>Maximum Thread Block Size</td><td class="text-right font-mono">${r.gpu.maxThreadBlockSize}</td></tr>
+        <tr><td>Registers per Multiprocessor</td><td class="text-right font-mono">${r.gpu.registersPerSM.toLocaleString()}</td></tr>
+        <tr><td>Max Registers per Thread Block</td><td class="text-right font-mono">${r.gpu.maxRegistersPerBlock.toLocaleString()}</td></tr>
+        <tr><td>Max Registers per Thread</td><td class="text-right font-mono">${r.gpu.maxRegistersPerThread}</td></tr>
+        <tr><td>Shared Memory per Multiprocessor</td><td class="text-right font-mono">${r.gpu.sharedMemPerSM.toLocaleString()}</td></tr>
+        <tr><td>Max Shared Memory per Block</td><td class="text-right font-mono">${r.gpu.maxSharedMemPerBlock.toLocaleString()}</td></tr>
+        <tr><td>Register Allocation Unit Size</td><td class="text-right font-mono">${r.gpu.regAllocUnit}</td></tr>
+        <tr><td>Shared Memory Allocation Unit Size</td><td class="text-right font-mono">${r.gpu.smemAllocUnit}</td></tr>
+        <tr><td>Warp Allocation Granularity</td><td class="text-right font-mono">${r.gpu.warpAllocGranularity}</td></tr>
+      `;
+
+      // Occupancy Limiters
+      const limitersBody = document.getElementById('limitersTable');
+      limitersBody.innerHTML = r.limiters.map(l => `
+        <tr class="${l.limiting ? 'bg-cuda-red/5' : ''}">
+          <td class="${l.limiting ? 'text-cuda-red font-semibold' : 'text-slate-300'}">${l.name}</td>
+          <td class="text-right font-mono">${l.blocks}</td>
+          <td class="text-right font-mono">${l.warpsPerBlock}</td>
+          <td class="text-right font-mono">${l.warpsPerSM}</td>
+          <td>${l.limiting ? '<span class="badge badge-red"><i class="fa-solid fa-lock mr-1"></i>Limiting</span>' : '<span class="badge badge-green">OK</span>'}</td>
+        </tr>
+      `).join('');
+
+      // Occupancy Data
+      const occBody = document.getElementById('occupancyTable');
+      occBody.innerHTML = `
+        <tr><td>Active Threads per Multiprocessor</td><td class="text-right font-mono">${r.activeThreads}</td></tr>
+        <tr><td>Active Warps per Multiprocessor</td><td class="text-right font-mono">${r.activeWarps}</td></tr>
+        <tr><td>Active Thread Blocks per Multiprocessor</td><td class="text-right font-mono">${r.activeBlocks}</td></tr>
+        <tr><td>Occupancy of each Multiprocessor</td><td class="text-right font-mono text-cuda-accent">${r.occupancy.toFixed(1)}%</td></tr>
+        <tr><td>Warps per Block</td><td class="text-right font-mono">${r.params.warpsPerBlock}</td></tr>
+        <tr><td>Registers per Warp</td><td class="text-right font-mono">${r.regsPerWarp.toLocaleString()}</td></tr>
+        <tr><td>Allocated Warps per Block</td><td class="text-right font-mono">${r.allocatedWarps}</td></tr>
+        <tr><td>Allocated Shared Memory per Block</td><td class="text-right font-mono">${r.allocSmem.toLocaleString()}</td></tr>
+      `;
+    }
+
+    // ===================== What-If & Waste Analysis =====================
+    function calculateWhatIf(params, scenario) {
+      let whatIfParams = { ...params };
+      if (scenario === 'no-regs') whatIfParams.registersPerThread = 0;
+      else if (scenario === 'no-smem') whatIfParams.sharedMemPerBlock = 0;
+      else if (scenario === 'max-threads') whatIfParams.threadsPerBlock = gpuDatabase[params.cc].maxThreadBlockSize;
+      else if (scenario === 'half-regs') whatIfParams.registersPerThread = Math.floor(params.registersPerThread / 2);
+      else if (scenario === 'half-smem') whatIfParams.sharedMemPerBlock = Math.floor(params.sharedMemPerBlock / 2);
+      else if (scenario === 'optimal') {
+        whatIfParams.registersPerThread = 0;
+        whatIfParams.sharedMemPerBlock = 0;
+      }
+      return calculateOccupancy(whatIfParams);
+    }
+
+    function renderWasteAnalysis(r) {
+      const params = getParams();
+
+      // Left: Waste bars
+      const wasteContainer = document.getElementById('wasteBars');
+      const wastes = [
+        { name: 'Warp Slots', used: r.activeWarps, total: r.gpu.maxWarpsPerSM, color: 'bg-cuda-accent' },
+        { name: 'Block Slots', used: r.activeBlocks, total: r.gpu.maxBlocksPerSM, color: 'bg-cuda-yellow' },
+        { name: 'Registers', used: r.activeBlocks * r.regsPerBlock, total: r.gpu.registersPerSM, color: 'bg-cuda-green' },
+        { name: 'Shared Memory', used: r.activeBlocks * r.allocSmem, total: r.gpu.sharedMemPerSM, color: 'bg-cuda-purple' },
+        { name: 'Threads', used: r.activeThreads, total: r.gpu.maxThreadsPerSM, color: 'bg-cuda-red' },
+      ];
+
+      wasteContainer.innerHTML = wastes.map(w => {
+        const unused = w.total - w.used;
+        const usedPct = w.total > 0 ? (w.used / w.total * 100) : 0;
+        const unusedPct = w.total > 0 ? (unused / w.total * 100) : 0;
+        return `
+          <div>
+            <div class="flex justify-between text-xs mb-1">
+              <span class="text-slate-300">${w.name}</span>
+              <span class="text-slate-400">unused <span class="text-cuda-red font-mono">${unused.toLocaleString()}</span> (${unusedPct.toFixed(1)}%)</span>
+            </div>
+            <div class="limit-bar-bg" style="height: 20px;">
+              <div class="limit-bar-fill ${w.color}" style="width: ${Math.min(usedPct, 100)}%;"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Right: What-If scenarios
+      const whatIfContainer = document.getElementById('whatIfTable');
+      const scenarios = [];
+
+      // Only show relevant what-ifs
+      if (r.params.registersPerThread > 0 && r.blockLimitRegs === r.activeBlocks) {
+        const noRegs = calculateWhatIf(params, 'no-regs');
+        scenarios.push({ label: 'If registers were free', occupancy: noRegs.occupancy, delta: noRegs.occupancy - r.occupancy, icon: 'fa-memory', color: 'text-cuda-green' });
+        const halfRegs = calculateWhatIf(params, 'half-regs');
+        if (halfRegs.occupancy > r.occupancy) {
+          scenarios.push({ label: `If registers halved to ${Math.floor(params.registersPerThread/2)}`, occupancy: halfRegs.occupancy, delta: halfRegs.occupancy - r.occupancy, icon: 'fa-scissors', color: 'text-cuda-accent' });
+        }
+      }
+      if (r.params.sharedMemPerBlock > 0 && r.blockLimitSmem === r.activeBlocks) {
+        const noSmem = calculateWhatIf(params, 'no-smem');
+        scenarios.push({ label: 'If shared memory were free', occupancy: noSmem.occupancy, delta: noSmem.occupancy - r.occupancy, icon: 'fa-layer-group', color: 'text-cuda-purple' });
+        const halfSmem = calculateWhatIf(params, 'half-smem');
+        if (halfSmem.occupancy > r.occupancy) {
+          scenarios.push({ label: `If shared memory halved to ${Math.floor(params.sharedMemPerBlock/2)}`, occupancy: halfSmem.occupancy, delta: halfSmem.occupancy - r.occupancy, icon: 'fa-scissors', color: 'text-cuda-accent' });
+        }
+      }
+      if (r.blockLimitWarps === r.activeBlocks) {
+        const maxThreads = calculateWhatIf(params, 'max-threads');
+        scenarios.push({ label: `If threads/block = ${r.gpu.maxThreadBlockSize}`, occupancy: maxThreads.occupancy, delta: maxThreads.occupancy - r.occupancy, icon: 'fa-users', color: 'text-cuda-yellow' });
+      }
+      const optimal = calculateWhatIf(params, 'optimal');
+      if (optimal.occupancy > r.occupancy) {
+        scenarios.push({ label: 'Theoretical maximum (no limits)', occupancy: optimal.occupancy, delta: optimal.occupancy - r.occupancy, icon: 'fa-rocket', color: 'text-cuda-red' });
+      }
+
+      if (scenarios.length === 0) {
+        whatIfContainer.innerHTML = `
+          <div class="flex items-center justify-center h-full text-sm text-slate-500 py-8">
+            <i class="fa-solid fa-check-circle text-cuda-green mr-2"></i>
+            Current configuration is already optimal for this GPU
+          </div>
+        `;
+      } else {
+        whatIfContainer.innerHTML = scenarios.map(s => `
+          <div class="flex items-center justify-between px-3 py-2.5 rounded-lg bg-cuda-panel/50 border border-cuda-border hover:border-cuda-accent/30 transition">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-lg bg-cuda-dark flex items-center justify-center">
+                <i class="fa-solid ${s.icon} ${s.color} text-xs"></i>
+              </div>
+              <div>
+                <div class="text-xs text-slate-300">${s.label}</div>
+                <div class="text-[10px] text-slate-500">+${s.delta.toFixed(1)}% occupancy</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="text-sm font-bold text-white font-mono">${s.occupancy.toFixed(1)}%</div>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+
+    // ===================== A/B Compare =====================
+    let compareConfig = { A: null, B: null, viewing: false };
+
+    function saveCompare(slot) {
+      const params = getParams();
+      const r = calculateOccupancy(params);
+      compareConfig[slot] = { params, result: r };
+      const detail = `${params.cc} | T=${params.threadsPerBlock} R=${params.registersPerThread} S=${params.sharedMemPerBlock} | ${r.occupancy.toFixed(1)}%`;
+      document.getElementById('compare' + slot + 'Detail').textContent = detail;
+      const card = document.getElementById('compare' + slot);
+      card.classList.add('active');
+      const btn = card.querySelector('button');
+      btn.textContent = 'Update';
+      btn.classList.remove('text-slate-400');
+      btn.classList.add('text-cuda-accent');
+    }
+
+    function toggleCompare() {
+      if (!compareConfig.A || !compareConfig.B) {
+        alert('Save both Config A and Config B first');
+        return;
+      }
+      compareConfig.viewing = !compareConfig.viewing;
+      const btn = document.getElementById('compareToggleBtn');
+      const panel = document.getElementById('compareOverlay');
+      if (compareConfig.viewing) {
+        btn.innerHTML = '<i class="fa-solid fa-eye-slash mr-1"></i>Hide Comparison';
+        renderCompareOverlay();
+      } else {
+        btn.innerHTML = '<i class="fa-solid fa-eye mr-1"></i>View Side-by-Side';
+        if (panel) panel.style.display = 'none';
+      }
+    }
+
+    function renderCompareOverlay() {
+      let panel = document.getElementById('compareOverlay');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'compareOverlay';
+        panel.className = 'fixed inset-x-0 bottom-0 z-50 bg-cuda-dark/95 backdrop-blur border-t border-cuda-border p-4';
+        document.body.appendChild(panel);
+      }
+      panel.style.display = 'block';
+      const a = compareConfig.A.result;
+      const b = compareConfig.B.result;
+      const diff = b.occupancy - a.occupancy;
+      const diffColor = diff > 0 ? 'text-cuda-green' : (diff < 0 ? 'text-cuda-red' : 'text-slate-400');
+      const diffIcon = diff > 0 ? 'fa-arrow-up' : (diff < 0 ? 'fa-arrow-down' : 'fa-minus');
+
+      panel.innerHTML = `
+        <div class="max-w-[1600px] mx-auto">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-white"><i class="fa-solid fa-code-compare text-cuda-accent mr-2"></i>A/B Comparison</h3>
+            <button onclick="toggleCompare()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <div class="glass-panel p-4 border-l-2 border-cuda-accent">
+              <div class="text-xs text-slate-400 mb-2">Config A</div>
+              <div class="text-2xl font-bold text-white">${a.occupancy.toFixed(1)}%</div>
+              <div class="text-[11px] text-slate-500 mt-1">${a.activeBlocks} blocks | ${a.activeWarps} warps | ${a.params.threadsPerBlock}T/${a.params.registersPerThread}R/${a.params.sharedMemPerBlock}S</div>
+            </div>
+            <div class="glass-panel p-4 flex flex-col items-center justify-center">
+              <div class="text-xs text-slate-400 mb-1">Difference</div>
+              <div class="text-3xl font-bold ${diffColor}"><i class="fa-solid ${diffIcon} text-sm mr-1"></i>${Math.abs(diff).toFixed(1)}%</div>
+              <div class="text-[11px] text-slate-500 mt-1">${diff > 0 ? 'B is better' : (diff < 0 ? 'A is better' : 'Same')}</div>
+            </div>
+            <div class="glass-panel p-4 border-l-2 border-cuda-purple">
+              <div class="text-xs text-slate-400 mb-2">Config B</div>
+              <div class="text-2xl font-bold text-white">${b.occupancy.toFixed(1)}%</div>
+              <div class="text-[11px] text-slate-500 mt-1">${b.activeBlocks} blocks | ${b.activeWarps} warps | ${b.params.threadsPerBlock}T/${b.params.registersPerThread}R/${b.params.sharedMemPerBlock}S</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ===================== Grid Size Calculator =====================
+    function calculateGrid() {
+      const totalElements = parseInt(document.getElementById('gridTotalElements').value) || 1;
+      const elementsPerThread = parseInt(document.getElementById('gridElementsPerThread').value) || 1;
+      const params = getParams();
+      const r = calculateOccupancy(params);
+      const totalThreads = Math.ceil(totalElements / elementsPerThread);
+      const blocks = Math.ceil(totalThreads / params.threadsPerBlock);
+      const warpsPerBlock = Math.ceil(params.threadsPerBlock / r.gpu.threadsPerWarp);
+      const totalWarps = blocks * warpsPerBlock;
+      const smsNeeded = Math.ceil(blocks / r.activeBlocks);
+      const threadsPerSm = r.activeThreads;
+      const totalSmsUtil = smsNeeded * threadsPerSm;
+      const threadUtilPct = totalThreads > 0 ? Math.min((totalThreads / totalSmsUtil) * 100, 100) : 0;
+
+      const resultDiv = document.getElementById('gridResult');
+      resultDiv.classList.remove('hidden');
+      resultDiv.innerHTML = `
+        <div class="flex justify-between border-b border-cuda-border pb-1"><span class="text-slate-400">Grid Size:</span><span class="text-cuda-accent font-mono font-bold">${blocks.toLocaleString()} blocks</span></div>
+        <div class="flex justify-between pt-1"><span class="text-slate-400">Total Threads:</span><span class="text-white font-mono">${totalThreads.toLocaleString()}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Total Warps:</span><span class="text-white font-mono">${totalWarps.toLocaleString()}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">SMs Needed:</span><span class="text-white font-mono">${smsNeeded.toLocaleString()}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Thread Utilization:</span><span class="${threadUtilPct >= 80 ? 'text-cuda-green' : 'text-cuda-yellow'} font-mono">${threadUtilPct.toFixed(1)}%</span></div>
+      `;
+    }
+
+    // ===================== Optimization Suggestions =====================
+    function renderOptimizationSuggestions(r) {
+      const container = document.getElementById('optimizationSuggestions');
+      const suggestions = [];
+      const params = getParams();
+
+      if (r.blockLimitRegs === r.activeBlocks && params.registersPerThread > 32) {
+        const step = Math.max(4, Math.floor(params.registersPerThread * 0.2));
+        for (let tryReg = params.registersPerThread - step; tryReg >= 32; tryReg -= step) {
+          const test = calculateOccupancy({ ...params, registersPerThread: tryReg });
+          if (test.occupancy > r.occupancy + 0.5) {
+            suggestions.push({
+              icon: 'fa-scissors', color: 'text-cuda-green',
+              action: () => { syncParam('regs', tryReg); onParamChange(); },
+              title: `Reduce registers to ${tryReg}`,
+              detail: `Occupancy: ${r.occupancy.toFixed(1)}% → ${test.occupancy.toFixed(1)}% (+${(test.occupancy - r.occupancy).toFixed(1)}%)`
+            });
+            break;
+          }
+        }
+      }
+
+      if (r.blockLimitWarps === r.activeBlocks) {
+        const candidates = [64, 128, 256];
+        for (const t of candidates) {
+          if (t >= params.threadsPerBlock) continue;
+          const test = calculateOccupancy({ ...params, threadsPerBlock: t });
+          if (test.occupancy > r.occupancy + 0.5) {
+            suggestions.push({
+              icon: 'fa-users', color: 'text-cuda-yellow',
+              action: () => { syncParam('threads', t); onParamChange(); },
+              title: `Use ${t} threads/block`,
+              detail: `More blocks per SM: ${r.occupancy.toFixed(1)}% → ${test.occupancy.toFixed(1)}% (+${(test.occupancy - r.occupancy).toFixed(1)}%)`
+            });
+            break;
+          }
+        }
+      }
+
+      if (r.blockLimitSmem === r.activeBlocks && params.sharedMemPerBlock > 0) {
+        const halfSmem = Math.max(0, Math.floor(params.sharedMemPerBlock / 2));
+        const test = calculateOccupancy({ ...params, sharedMemPerBlock: halfSmem });
+        if (test.occupancy > r.occupancy + 0.5) {
+          suggestions.push({
+            icon: 'fa-layer-group', color: 'text-cuda-purple',
+            action: () => { syncParam('smem', halfSmem); onParamChange(); },
+            title: `Halve shared memory to ${halfSmem}`,
+            detail: `Occupancy: ${r.occupancy.toFixed(1)}% → ${test.occupancy.toFixed(1)}% (+${(test.occupancy - r.occupancy).toFixed(1)}%)`
+          });
+        }
+      }
+
+      if (r.occupancy < 50 && r.blockLimitRegs !== r.activeBlocks && r.blockLimitSmem !== r.activeBlocks && r.blockLimitWarps !== r.activeBlocks) {
+        suggestions.push({
+          icon: 'fa-lightbulb', color: 'text-cuda-accent',
+          action: null,
+          title: 'Consider increasing block size',
+          detail: 'Current config is not hitting any hardware limit—you may be able to use larger blocks'
+        });
+      }
+
+      if (suggestions.length === 0) {
+        container.innerHTML = `
+          <div class="flex items-center justify-center py-8 text-sm text-slate-500">
+            <i class="fa-solid fa-check-circle text-cuda-green mr-2"></i>
+            No obvious optimizations for this config
+          </div>
+        `;
+      } else {
+        container.innerHTML = suggestions.map((s, i) => `
+          <div class="flex items-start gap-3 px-3 py-2.5 rounded-lg bg-cuda-panel/50 border border-cuda-border hover:border-cuda-accent/30 transition ${s.action ? 'cursor-pointer' : ''}" ${s.action ? `onclick="applySuggestion(${i})"` : ''}>
+            <div class="w-8 h-8 rounded-lg bg-cuda-dark flex items-center justify-center shrink-0 mt-0.5">
+              <i class="fa-solid ${s.icon} ${s.color} text-xs"></i>
+            </div>
+            <div>
+              <div class="text-xs text-slate-200 font-medium">${s.title}</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">${s.detail}</div>
+            </div>
+          </div>
+        `).join('');
+        container.dataset.suggestions = JSON.stringify(suggestions.map(s => s.action ? s.action.toString() : null));
+      }
+    }
+
+    function applySuggestion(idx) {
+      const params = getParams();
+      if (idx === 0 && params.registersPerThread > 32) {
+        const step = Math.max(4, Math.floor(params.registersPerThread * 0.2));
+        for (let tryReg = params.registersPerThread - step; tryReg >= 32; tryReg -= step) {
+          const test = calculateOccupancy({ ...params, registersPerThread: tryReg });
+          if (test.occupancy > calculateOccupancy(params).occupancy + 0.5) {
+            syncParam('regs', tryReg); onParamChange(); return;
+          }
+        }
+      } else if (idx === 1) {
+        const candidates = [64, 128, 256];
+        for (const t of candidates) {
+          if (t >= params.threadsPerBlock) continue;
+          const test = calculateOccupancy({ ...params, threadsPerBlock: t });
+          if (test.occupancy > calculateOccupancy(params).occupancy + 0.5) {
+            syncParam('threads', t); onParamChange(); return;
+          }
+        }
+      } else if (idx === 2 && params.sharedMemPerBlock > 0) {
+        const halfSmem = Math.max(0, Math.floor(params.sharedMemPerBlock / 2));
+        syncParam('smem', halfSmem); onParamChange();
+      }
+    }
+
+    // ===================== Occupancy Heatmap =====================
+    function renderOccupancyHeatmap(r) {
+      const canvas = document.getElementById('occupancyHeatmap');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = (rect.width || 600) * dpr;
+      canvas.height = 300 * dpr;
+      ctx.scale(dpr, dpr);
+      const W = canvas.width / dpr;
+      const H = canvas.height / dpr;
+
+      const params = getParams();
+      const gpu = r.gpu;
+      const threadSteps = [];
+      for (let t = 32; t <= gpu.maxThreadBlockSize; t += 64) threadSteps.push(t);
+      const regSteps = [];
+      for (let reg = 0; reg <= 255; reg += 16) regSteps.push(reg);
+
+      const cellW = W / threadSteps.length;
+      const cellH = H / regSteps.length;
+
+      for (let ri = 0; ri < regSteps.length; ri++) {
+        for (let ti = 0; ti < threadSteps.length; ti++) {
+          const occ = calculateOccupancy({ ...params, threadsPerBlock: threadSteps[ti], registersPerThread: regSteps[ri] }).occupancy;
+          ctx.fillStyle = occupancyToHeatColor(occ);
+          ctx.fillRect(Math.floor(ti * cellW), Math.floor(ri * cellH), Math.ceil(cellW + 1), Math.ceil(cellH + 1));
+        }
+      }
+
+      const curTi = threadSteps.findIndex(t => t === params.threadsPerBlock);
+      const curRi = regSteps.findIndex(reg => Math.abs(reg - params.registersPerThread) < 16);
+      if (curTi >= 0 && curRi >= 0) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(Math.floor(curTi * cellW), Math.floor(curRi * cellH), Math.ceil(cellW), Math.ceil(cellH));
+      }
+    }
+
+    function occupancyToHeatColor(occ) {
+      if (occ >= 75) return '#10b981';
+      if (occ >= 50) return '#06b6d4';
+      if (occ >= 25) return '#f59e0b';
+      if (occ > 0) return '#ef4444';
+      return '#1e293b';
+    }
+
+    // ===================== Charts =====================
+    function initCharts() {
+      if (typeof Chart === 'undefined') {
+        console.warn('Chart.js not loaded, charts disabled');
+        return;
+      }
+      const commonOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(15,23,42,0.95)',
+            titleColor: '#e2e8f0',
+            bodyColor: '#e2e8f0',
+            borderColor: '#334155',
+            borderWidth: 1,
+            padding: 10,
+            callbacks: {
+              label: function(ctx) {
+                return 'Occupancy: ' + ctx.parsed.y.toFixed(1) + '%';
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(51,65,85,0.3)' },
+            ticks: { color: '#94a3b8', font: { size: 11 } },
+            title: { display: true, color: '#64748b', font: { size: 11 } }
+          },
+          y: {
+            min: 0, max: 100,
+            grid: { color: 'rgba(51,65,85,0.3)' },
+            ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + '%' },
+            title: { display: true, text: 'Occupancy %', color: '#64748b', font: { size: 11 } }
+          }
+        }
+      };
+
+      const ctx1 = document.getElementById('threadsChart').getContext('2d');
+      threadsChart = new Chart(ctx1, {
+        type: 'line',
+        data: { labels: [], datasets: [{ data: [], borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.1)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 5 }] },
+        options: { ...commonOptions, scales: { ...commonOptions.scales, x: { ...commonOptions.scales.x, title: { display: true, text: 'Threads Per Block', color: '#64748b', font: { size: 11 } } } } }
+      });
+
+      const ctx2 = document.getElementById('regsChart').getContext('2d');
+      regsChart = new Chart(ctx2, {
+        type: 'line',
+        data: { labels: [], datasets: [{ data: [], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 5 }] },
+        options: { ...commonOptions, scales: { ...commonOptions.scales, x: { ...commonOptions.scales.x, title: { display: true, text: 'Registers Per Thread', color: '#64748b', font: { size: 11 } } } } }
+      });
+    }
+
+    function updateCharts(currentResult) {
+      if (!threadsChart || !regsChart) return;
+      const params = getParams();
+      const gpu = gpuDatabase[params.cc];
+
+      // Threads chart
+      const threadVals = [];
+      const threadLabels = [];
+      const threadOccs = [];
+      for (let t = 32; t <= gpu.maxThreadBlockSize; t += 32) {
+        const r = calculateOccupancy({ ...params, threadsPerBlock: t });
+        threadLabels.push(t);
+        threadOccs.push(r.occupancy);
+        if (t === params.threadsPerBlock) threadVals.push({ x: t, y: r.occupancy });
+      }
+
+      threadsChart.data.labels = threadLabels;
+      threadsChart.data.datasets[0].data = threadOccs;
+      threadsChart.data.datasets[0].pointRadius = threadLabels.map(t => t === params.threadsPerBlock ? 6 : 0);
+      threadsChart.data.datasets[0].pointBackgroundColor = threadLabels.map(t => t === params.threadsPerBlock ? '#06b6d4' : 'transparent');
+      threadsChart.update('none');
+
+      // Regs chart
+      const regLabels = [];
+      const regOccs = [];
+      for (let reg = 0; reg <= 255; reg += 4) {
+        const r = calculateOccupancy({ ...params, registersPerThread: reg });
+        regLabels.push(reg);
+        regOccs.push(r.occupancy);
+      }
+
+      regsChart.data.labels = regLabels;
+      regsChart.data.datasets[0].data = regOccs;
+      regsChart.data.datasets[0].pointRadius = regLabels.map(r => r === params.registersPerThread ? 6 : 0);
+      regsChart.data.datasets[0].pointBackgroundColor = regLabels.map(r => r === params.registersPerThread ? '#10b981' : 'transparent');
+      regsChart.update('none');
+    }
+
+    // ===================== Init =====================
+    document.addEventListener('DOMContentLoaded', () => {
+      bindParam('threads', onParamChange);
+      bindParam('regs', onParamChange);
+      bindParam('smem', onParamChange);
+      bindParam('barriers', onParamChange);
+      document.getElementById('ccSelect').addEventListener('change', onParamChange);
+      initCharts();
+      updateSharedMemSliderMax();
+      calculateAndRender();
+    });
+  </script>
+</body>
+</html>

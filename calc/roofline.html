@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPU Roofline Model</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'cuda-dark': '#0f172a',
+            'cuda-panel': '#1e293b',
+            'cuda-border': '#334155',
+            'cuda-accent': '#06b6d4',
+            'cuda-accent-dim': '#0891b2',
+            'cuda-green': '#10b981',
+            'cuda-yellow': '#f59e0b',
+            'cuda-red': '#ef4444',
+            'cuda-purple': '#8b5cf6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .panel { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+    .check-gpu { accent-color: #06b6d4; }
+    .check-prec { accent-color: #8b5cf6; }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <div class="max-w-7xl mx-auto">
+    <header class="mb-6 flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl font-bold text-cuda-accent"><i class="fas fa-chart-line mr-2"></i>GPU Roofline Model</h1>
+        <p class="text-slate-400 mt-1">Peak Performance vs. Arithmetic Intensity (log-log)</p>
+      </div>
+      <a href="index.html" class="text-cuda-accent hover:text-cuda-accent-dim transition">
+        <i class="fas fa-calculator mr-1"></i>Occupancy Calculator
+      </a>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <!-- Controls -->
+      <div class="lg:col-span-1 space-y-4">
+        <div class="panel p-4">
+          <h2 class="text-lg font-semibold mb-3 text-cuda-accent"><i class="fas fa-microchip mr-2"></i>GPU</h2>
+          <div id="gpuControls" class="space-y-2"></div>
+        </div>
+
+        <div class="panel p-4">
+          <h2 class="text-lg font-semibold mb-3 text-cuda-purple"><i class="fas fa-bullseye mr-2"></i>Precision</h2>
+          <div id="precControls" class="space-y-2"></div>
+        </div>
+
+        <div class="panel p-4">
+          <h2 class="text-lg font-semibold mb-3 text-cuda-green"><i class="fas fa-sliders-h mr-2"></i>Options</h2>
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="showRidge" checked class="check-gpu w-4 h-4">
+            <span>Show Ridge Points</span>
+          </label>
+          <label class="flex items-center space-x-2 cursor-pointer mt-2">
+            <input type="checkbox" id="showWorkloads" checked class="check-gpu w-4 h-4">
+            <span>Show Example Workloads</span>
+          </label>
+        </div>
+
+        <div class="panel p-4 text-sm text-slate-400">
+          <p class="mb-2"><strong class="text-slate-200">Formula:</strong></p>
+          <p class="font-mono text-cuda-accent">Perf = min(ComputePeak, BW × AI)</p>
+          <p class="mt-2"><strong class="text-slate-200">Ridge Point:</strong></p>
+          <p class="font-mono text-cuda-yellow">AI = Peak / BW</p>
+        </div>
+      </div>
+
+      <!-- Chart -->
+      <div class="lg:col-span-3">
+        <div class="panel p-4 h-[600px]">
+          <canvas id="rooflineChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Table -->
+    <div class="panel p-4 mt-6">
+      <h2 class="text-lg font-semibold mb-3 text-cuda-accent">Active Rooflines</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left">
+          <thead class="text-slate-400 border-b border-cuda-border">
+            <tr>
+              <th class="py-2 px-3">GPU</th>
+              <th class="py-2 px-3">Precision</th>
+              <th class="py-2 px-3">Peak Compute</th>
+              <th class="py-2 px-3">Memory BW</th>
+              <th class="py-2 px-3">Ridge Point (FLOPs/Byte)</th>
+              <th class="py-2 px-3">Bounded By</th>
+            </tr>
+          </thead>
+          <tbody id="statsTable" class="text-slate-200"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── GPU Database ─────────────────────────────────────────────
+    const gpuDB = {
+      "RTX 5090": {
+        bandwidth: 1792, // GB/s
+        color: "#ef4444",
+        precisions: {
+          "FP32":  105,
+          "FP16":  419,
+          "FP8":   838,
+        }
+      },
+      "A100 SXM": {
+        bandwidth: 2039,
+        color: "#10b981",
+        precisions: {
+          "FP32":         19.5,
+          "FP16 (TC)":   312,
+          "FP16 (TC*)":  624,
+        }
+      },
+      "H100 SXM": {
+        bandwidth: 3350,
+        color: "#06b6d4",
+        precisions: {
+          "FP32":        67,
+          "FP16 (TC)":  989,
+          "FP16 (TC*)": 1979,
+          "FP8 (TC)":  1979,
+          "FP8 (TC*)": 3958,
+        }
+      },
+    };
+
+    // Precision line colors (shared across GPUs)
+    const precColors = {
+      "FP32":       "#f59e0b",
+      "FP16":       "#8b5cf6",
+      "FP16 (TC)":  "#8b5cf6",
+      "FP16 (TC*)": "#a78bfa",
+      "FP8":        "#ec4899",
+      "FP8 (TC)":   "#ec4899",
+      "FP8 (TC*)":  "#f472b6",
+    };
+
+    // Example workloads (AI in FLOPs/Byte, name)
+    const workloads = [
+      { name: "Dense GEMM (large)",    ai: 1000,   color: "#ffffff" },
+      { name: "Batch=1 Transformer",   ai: 80,     color: "#94a3b8" },
+      { name: "Batch=64 Transformer",  ai: 300,    color: "#64748b" },
+      { name: "Conv2d (ResNet)",       ai: 20,     color: "#475569" },
+      { name: "Sparse Attention",      ai: 5,      color: "#334155" },
+      { name: "Element-wise (ReLU)",   ai: 0.25,   color: "#1e293b" },
+    ];
+
+    // ── UI Builders ──────────────────────────────────────────────
+    function buildControls() {
+      const gpuDiv = document.getElementById('gpuControls');
+      Object.keys(gpuDB).forEach(gpu => {
+        gpuDiv.innerHTML += `
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" class="check-gpu w-4 h-4 gpu-check" data-gpu="${gpu}" checked>
+            <span style="color:${gpuDB[gpu].color}"><i class="fas fa-square mr-1"></i>${gpu}</span>
+          </label>`;
+      });
+
+      // Collect all unique precision names
+      const allPrec = new Set();
+      Object.values(gpuDB).forEach(g => Object.keys(g.precisions).forEach(p => allPrec.add(p)));
+      const precDiv = document.getElementById('precControls');
+      allPrec.forEach(p => {
+        const c = precColors[p] || "#cbd5e1";
+        precDiv.innerHTML += `
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" class="check-prec w-4 h-4 prec-check" data-prec="${p}" checked>
+            <span style="color:${c}"><i class="fas fa-minus mr-1"></i>${p}</span>
+          </label>`;
+      });
+
+      document.querySelectorAll('.gpu-check, .prec-check, #showRidge, #showWorkloads')
+        .forEach(el => el.addEventListener('change', updateChart));
+    }
+
+    // ── Roofline Data Generation ─────────────────────────────────
+    function makeRoofline(gpuName, precName, peakTFLOPS, bwGBs, nPoints = 200) {
+      const bwTBs = bwGBs / 1000; // TB/s
+      const ridge = peakTFLOPS / bwTBs;
+
+      const xs = [];
+      const ys = [];
+      const minX = 0.1;
+      const maxX = 10000;
+      const logMin = Math.log10(minX);
+      const logMax = Math.log10(maxX);
+
+      for (let i = 0; i < nPoints; i++) {
+        const t = i / (nPoints - 1);
+        const ai = Math.pow(10, logMin + t * (logMax - logMin));
+        const perf = Math.min(peakTFLOPS, bwTBs * ai);
+        xs.push(ai);
+        ys.push(perf);
+      }
+      return { xs, ys, ridge };
+    }
+
+    // ── Chart Setup ──────────────────────────────────────────────
+    const ctx = document.getElementById('rooflineChart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'point', intersect: false },
+        plugins: {
+          legend: {
+            labels: { color: '#e2e8f0', font: { size: 12 } },
+            position: 'top',
+          },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            titleColor: '#06b6d4',
+            bodyColor: '#e2e8f0',
+            borderColor: '#334155',
+            borderWidth: 1,
+            callbacks: {
+              label: function(ctx) {
+                const ds = ctx.dataset;
+                if (ds.workload) {
+                  return `${ds.label}: AI=${ctx.parsed.x.toFixed(2)} FLOPs/B`;
+                }
+                return `${ds.label}: ${ctx.parsed.y.toFixed(1)} TFLOPS @ AI=${ctx.parsed.x.toFixed(2)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'logarithmic',
+            title: { display: true, text: 'Arithmetic Intensity (FLOPs / Byte)', color: '#94a3b8', font: { size: 14 } },
+            grid: { color: '#334155' },
+            ticks: { color: '#94a3b8', callback: v => Number(v).toFixed(v >= 1 ? 0 : 1) },
+            min: 0.1,
+            max: 10000,
+          },
+          y: {
+            type: 'logarithmic',
+            title: { display: true, text: 'Performance (TFLOPS)', color: '#94a3b8', font: { size: 14 } },
+            grid: { color: '#334155' },
+            ticks: { color: '#94a3b8' },
+            min: 1,
+            max: 10000,
+          }
+        },
+        elements: {
+          line: { tension: 0, borderWidth: 2 },
+          point: { radius: 0, hitRadius: 6 }
+        }
+      }
+    });
+
+    // ── Update Chart ─────────────────────────────────────────────
+    function updateChart() {
+      const activeGPUs = Array.from(document.querySelectorAll('.gpu-check:checked')).map(c => c.dataset.gpu);
+      const activePrec = Array.from(document.querySelectorAll('.prec-check:checked')).map(c => c.dataset.prec);
+      const showRidge = document.getElementById('showRidge').checked;
+      const showWorkloads = document.getElementById('showWorkloads').checked;
+
+      const datasets = [];
+      const tableRows = [];
+
+      activeGPUs.forEach(gpu => {
+        const info = gpuDB[gpu];
+        Object.entries(info.precisions).forEach(([prec, peak]) => {
+          if (!activePrec.includes(prec)) return;
+
+          const color = precColors[prec] || info.color;
+          const { xs, ys, ridge } = makeRoofline(gpu, prec, peak, info.bandwidth);
+
+          datasets.push({
+            label: `${gpu} ${prec}`,
+            data: xs.map((x, i) => ({ x, y: ys[i] })),
+            borderColor: color,
+            backgroundColor: color,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          });
+
+          // Ridge point marker
+          if (showRidge) {
+            datasets.push({
+              label: `${gpu} ${prec} ridge`,
+              data: [{ x: ridge, y: peak }],
+              borderColor: color,
+              backgroundColor: '#0f172a',
+              borderWidth: 2,
+              pointRadius: 5,
+              pointStyle: 'triangle',
+              pointHoverRadius: 7,
+              showLine: false,
+            });
+          }
+
+          tableRows.push({
+            gpu, prec, peak, bw: info.bandwidth, ridge,
+            bound: ridge < 50 ? 'Memory' : (ridge > 500 ? 'Compute' : 'Balanced')
+          });
+        });
+      });
+
+      // Workload scatter points
+      if (showWorkloads) {
+        workloads.forEach(w => {
+          datasets.push({
+            label: w.name,
+            data: [{ x: w.ai, y: 1.5 }], // y placed low so it doesn't clutter
+            borderColor: w.color,
+            backgroundColor: w.color,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            showLine: false,
+            workload: true,
+          });
+        });
+      }
+
+      chart.data.datasets = datasets;
+      chart.update();
+
+      // Update stats table
+      const tbody = document.getElementById('statsTable');
+      tbody.innerHTML = tableRows.map(r => `
+        <tr class="border-b border-cuda-border hover:bg-slate-800/50">
+          <td class="py-2 px-3 font-medium" style="color:${gpuDB[r.gpu].color}">${r.gpu}</td>
+          <td class="py-2 px-3" style="color:${precColors[r.prec]||'#cbd5e1'}">${r.prec}</td>
+          <td class="py-2 px-3">${r.peak.toLocaleString()} TFLOPS</td>
+          <td class="py-2 px-3">${r.bw.toLocaleString()} GB/s</td>
+          <td class="py-2 px-3 font-mono">${r.ridge.toFixed(1)}</td>
+          <td class="py-2 px-3">
+            <span class="px-2 py-0.5 rounded text-xs font-semibold ${r.bound === 'Memory' ? 'bg-cuda-red/20 text-cuda-red' : (r.bound === 'Compute' ? 'bg-cuda-green/20 text-cuda-green' : 'bg-cuda-yellow/20 text-cuda-yellow')}">${r.bound}</span>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    buildControls();
+    updateChart();
+  </script>
+</body>
+</html>
