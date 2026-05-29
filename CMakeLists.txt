@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 80 CACHE STRING "CUDA GPU architectures")
+endif()
+
 project(learn_cuda LANGUAGES CXX CUDA)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -20,11 +24,16 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA GPU architectures" FORCE)
-endif()
+message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
-set(CMAKE_CUDA_ARCHITECTURES 89)
+foreach(cuda_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    if(cuda_arch MATCHES "^([0-9]+)" AND CMAKE_MATCH_1 LESS 80)
+        message(FATAL_ERROR
+            "This project uses cp.async and requires CUDA architecture >= 80. "
+            "Got CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}.")
+    endif()
+endforeach()
+
 find_package(CUDAToolkit REQUIRED)
 
 add_executable(learn_cuda
@@ -32,6 +41,10 @@ add_executable(learn_cuda
 )
 
 target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas)
+
+target_include_directories(learn_cuda PRIVATE
+    ${CMAKE_SOURCE_DIR}/cutlass/include
+)
 
 target_compile_features(learn_cuda PRIVATE cxx_std_17 cuda_std_17)
 
@@ -41,7 +54,7 @@ target_compile_options(learn_cuda PRIVATE
 )
 
 set_target_properties(learn_cuda PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_SEPARABLE_COMPILATION OFF
     CUDA_RUNTIME_LIBRARY Shared
 )
 

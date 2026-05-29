@@ -90,10 +90,15 @@ private:
 
 enum class KernelType {
   Custom,
+  CutlassLikeStage5,
+  CutlassLikeStage5OneCta,
+  CutlassLikeStage5WarpOrder,
+  CutlassLikeStage5Schedule,
+  CutlassLikeStage5CopySchedule,
+  CutlassLikeStage5MmaOrder,
+  CutlassRefStage5,
   Naive,
   CuBlas,
-  DoubleBuffer,
-  Trial,
   ExternalDoubleBuffer,
   ExternalNoDoubleBuffer,
 };
@@ -118,15 +123,22 @@ void print_usage(const char *program) {
     "\n"
     "Kernel types (can specify multiple):\n"
     "  custom        (default) sgemm_128x128x32\n"
+    "  cutlass-stage5 cutlass-like 128x128x8 SGEMM with 5-stage cp.async\n"
+    "  cutlass-stage5-1cta same kernel with extra smem to reduce CTA residency\n"
+    "  cutlass-stage5-warporder same kernel with CUTLASS warp tile order\n"
+    "  cutlass-stage5-schedule CUTLASS warp order plus CUTLASS-like copy schedule\n"
+    "  cutlass-stage5-copyorder CUTLASS-like copy schedule only\n"
+    "  cutlass-stage5-mmaorder CUTLASS SM80 thread-level FFMA order\n"
+    "  cutlass-ref   CUTLASS SM80 SIMT 128x128x8 stage-5 reference\n"
     "  naive         naive sgemm\n"
     "  cublas        cuBLAS reference\n"
-    "  double-buffer sgemm_128x128x32 with double buffering\n"
-    "  trial         sgemm_128x128x32 with 64 KiB smem (occupancy experiment)\n"
     "  external-db   external 128x128x16 SGEMM with smem double buffering\n"
     "  external-nodb external 128x128x16 SGEMM without smem double buffering\n"
     "\n"
     "Legacy flags (also supported):\n"
-    "  --naive, --cublas, --double-buffer, --trial, --external-db, --external-nodb\n";
+    "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
+    "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
+    "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -170,13 +182,18 @@ std::optional<std::string_view> read_option_value(int argc, char **argv,
 }
 
 bool parse_kernel_type(std::string_view value, KernelType *out) {
-  if (value == "custom")        { *out = KernelType::Custom;        return true; }
-  if (value == "naive")         { *out = KernelType::Naive;         return true; }
-  if (value == "cublas")        { *out = KernelType::CuBlas;        return true; }
-  if (value == "double-buffer") { *out = KernelType::DoubleBuffer;  return true; }
-  if (value == "trial")         { *out = KernelType::Trial;         return true; }
-  if (value == "external-db")   { *out = KernelType::ExternalDoubleBuffer;  return true; }
-  if (value == "external-nodb") { *out = KernelType::ExternalNoDoubleBuffer; return true; }
+  if (value == "custom")                   { *out = KernelType::Custom;            return true; }
+  if (value == "cutlass-stage5")           { *out = KernelType::CutlassLikeStage5; return true; }
+  if (value == "cutlass-stage5-1cta")      { *out = KernelType::CutlassLikeStage5OneCta; return true; }
+  if (value == "cutlass-stage5-warporder") { *out = KernelType::CutlassLikeStage5WarpOrder; return true; }
+  if (value == "cutlass-stage5-schedule")  { *out = KernelType::CutlassLikeStage5Schedule; return true; }
+  if (value == "cutlass-stage5-copyorder") { *out = KernelType::CutlassLikeStage5CopySchedule; return true; }
+  if (value == "cutlass-stage5-mmaorder")  { *out = KernelType::CutlassLikeStage5MmaOrder; return true; }
+  if (value == "cutlass-ref")              { *out = KernelType::CutlassRefStage5;  return true; }
+  if (value == "naive")                    { *out = KernelType::Naive;             return true; }
+  if (value == "cublas")                   { *out = KernelType::CuBlas;            return true; }
+  if (value == "external-db")              { *out = KernelType::ExternalDoubleBuffer;  return true; }
+  if (value == "external-nodb")            { *out = KernelType::ExternalNoDoubleBuffer; return true; }
   return false;
 }
 
@@ -197,17 +214,26 @@ bool parse_args(int argc, char **argv, Options *options) {
       return true;
     }
 
-    if (arg == "--naive")         { options->kernels.push_back(KernelType::Naive);        continue; }
-    if (arg == "--cublas")        { options->kernels.push_back(KernelType::CuBlas);       continue; }
-    if (arg == "--double-buffer") { options->kernels.push_back(KernelType::DoubleBuffer); continue; }
-    if (arg == "--trial")         { options->kernels.push_back(KernelType::Trial);        continue; }
-    if (arg == "--external-db")   { options->kernels.push_back(KernelType::ExternalDoubleBuffer);  continue; }
-    if (arg == "--external-nodb") { options->kernels.push_back(KernelType::ExternalNoDoubleBuffer); continue; }
+    if (arg == "--naive")                    { options->kernels.push_back(KernelType::Naive);             continue; }
+    if (arg == "--cublas")                   { options->kernels.push_back(KernelType::CuBlas);            continue; }
+    if (arg == "--cutlass-stage5")           { options->kernels.push_back(KernelType::CutlassLikeStage5); continue; }
+    if (arg == "--cutlass-stage5-1cta")      { options->kernels.push_back(KernelType::CutlassLikeStage5OneCta); continue; }
+    if (arg == "--cutlass-stage5-warporder") { options->kernels.push_back(KernelType::CutlassLikeStage5WarpOrder); continue; }
+    if (arg == "--cutlass-stage5-schedule")  { options->kernels.push_back(KernelType::CutlassLikeStage5Schedule); continue; }
+    if (arg == "--cutlass-stage5-copyorder") { options->kernels.push_back(KernelType::CutlassLikeStage5CopySchedule); continue; }
+    if (arg == "--cutlass-stage5-mmaorder")  { options->kernels.push_back(KernelType::CutlassLikeStage5MmaOrder); continue; }
+    if (arg == "--cutlass-ref")              { options->kernels.push_back(KernelType::CutlassRefStage5);  continue; }
+    if (arg == "--external-db")              { options->kernels.push_back(KernelType::ExternalDoubleBuffer);  continue; }
+    if (arg == "--external-nodb")            { options->kernels.push_back(KernelType::ExternalNoDoubleBuffer); continue; }
 
     if (auto value = read_option_value(argc, argv, &i, "--kernel")) {
       KernelType kt;
       if (!parse_kernel_type(*value, &kt)) {
-        std::cerr << "--kernel must be one of: custom, naive, cublas, double-buffer, trial, external-db, external-nodb\n";
+        std::cerr << "--kernel must be one of: custom, cutlass-stage5, "
+                     "cutlass-stage5-1cta, cutlass-stage5-warporder, "
+                     "cutlass-stage5-schedule, cutlass-stage5-copyorder, "
+                     "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
+                     "external-db, external-nodb\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -355,6 +381,119 @@ bool launch_custom(const Options &options, float *A, float *B, float *C) {
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool launch_cutlass_like_stage5(const Options &options, float *A, float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5 requires M and N to be multiples of 128, "
+                 "and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5(A, B, C, options.m, options.n,
+                                             options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_like_stage5_one_cta(const Options &options, float *A,
+                                        float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5-1cta requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+  if (!CUDA_CHECK(cudaFuncSetAttribute(
+          cutlass_like::sgemm_128x128x8stage5_kernel<false, false, false>,
+          cudaFuncAttributeMaxDynamicSharedMemorySize,
+          cutlass_like::kOneCtaPerSmSmemBytes))) {
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5_one_cta_per_sm(
+      A, B, C, options.m, options.n, options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_like_stage5_warp_order(const Options &options, float *A,
+                                           float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5-warporder requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5_cutlass_warp_order(
+      A, B, C, options.m, options.n, options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_like_stage5_schedule(const Options &options, float *A,
+                                         float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5-schedule requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5_cutlass_schedule(
+      A, B, C, options.m, options.n, options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_like_stage5_copy_schedule(const Options &options, float *A,
+                                              float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5-copyorder requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5_cutlass_copy_schedule(
+      A, B, C, options.m, options.n, options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_like_stage5_mma_order(const Options &options, float *A,
+                                          float *B, float *C) {
+  if (options.m % cutlass_like::kCtaM != 0 ||
+      options.n % cutlass_like::kCtaN != 0 ||
+      options.k % cutlass_like::kCtaK != 0 ||
+      options.k < cutlass_like::kCtaK * (cutlass_like::kStages - 1)) {
+    std::cerr << "cutlass-stage5-mmaorder requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 8 with K >= 32.\n";
+    return false;
+  }
+
+  cutlass_like::launch_sgemm_128x128x8stage5_cutlass_sm80_mma_order(
+      A, B, C, options.m, options.n, options.k);
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_ref_stage5(const Options &options, float *A, float *B,
+                               float *C) {
+  cutlass::Status status = cutlass_ref::launch_sgemm_128x128x8stage5(
+      A, B, C, options.m, options.n, options.k);
+  if (status != cutlass::Status::kSuccess) {
+    std::cerr << "cutlass-ref failed: "
+              << cutlass::cutlassGetStatusString(status) << '\n';
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
 bool launch_naive(const Options &options, float *A, float *B, float *C) {
   dim3 block(16, 16);
   dim3 grid((options.n + block.x - 1) / block.x,
@@ -384,36 +523,6 @@ bool launch_cublas(const Options &options, float *A, float *B, float *C) {
   return CUDA_CHECK(cudaGetLastError());
 }
 
-bool launch_double_buffer(const Options &options, float *A, float *B, float *C) {
-  dim3 block(256);
-  dim3 grid(options.n / 128, options.m / 128);
-  constexpr std::size_t dynamic_smem = 65536;
-  if (!CUDA_CHECK(cudaFuncSetAttribute(
-          low_occupancy::sgemm_128x128x32_double_buffer,
-          cudaFuncAttributeMaxDynamicSharedMemorySize,
-          dynamic_smem))) {
-    return false;
-  }
-  low_occupancy::sgemm_128x128x32_double_buffer<<<grid, block, dynamic_smem>>>(
-      options.m, options.n, options.k, A, B, C);
-  return CUDA_CHECK(cudaGetLastError());
-}
-
-bool launch_trial(const Options &options, float *A, float *B, float *C) {
-  dim3 block(256);
-  dim3 grid(options.n / 128, options.m / 128);
-  constexpr std::size_t dynamic_smem = custom::trial::kTrialSmemBytes;
-  if (!CUDA_CHECK(cudaFuncSetAttribute(
-          custom::trial::sgemm_128x128x32_trial,
-          cudaFuncAttributeMaxDynamicSharedMemorySize,
-          dynamic_smem))) {
-    return false;
-  }
-  custom::trial::sgemm_128x128x32_trial<<<grid, block, dynamic_smem>>>(
-      options.m, options.n, options.k, A, B, C);
-  return CUDA_CHECK(cudaGetLastError());
-}
-
 bool launch_external_double_buffer(const Options &options, float *A, float *B, float *C) {
   dim3 block(256);
   dim3 grid(options.n / 128, options.m / 128);
@@ -433,10 +542,15 @@ bool launch_external_no_double_buffer(const Options &options, float *A, float *B
 LaunchFn select_launcher(KernelType type) {
   switch (type) {
     case KernelType::Custom:                 return launch_custom;
+    case KernelType::CutlassLikeStage5:      return launch_cutlass_like_stage5;
+    case KernelType::CutlassLikeStage5OneCta: return launch_cutlass_like_stage5_one_cta;
+    case KernelType::CutlassLikeStage5WarpOrder: return launch_cutlass_like_stage5_warp_order;
+    case KernelType::CutlassLikeStage5Schedule:  return launch_cutlass_like_stage5_schedule;
+    case KernelType::CutlassLikeStage5CopySchedule: return launch_cutlass_like_stage5_copy_schedule;
+    case KernelType::CutlassLikeStage5MmaOrder:  return launch_cutlass_like_stage5_mma_order;
+    case KernelType::CutlassRefStage5:       return launch_cutlass_ref_stage5;
     case KernelType::Naive:                  return launch_naive;
     case KernelType::CuBlas:                 return launch_cublas;
-    case KernelType::DoubleBuffer:           return launch_double_buffer;
-    case KernelType::Trial:                  return launch_trial;
     case KernelType::ExternalDoubleBuffer:   return launch_external_double_buffer;
     case KernelType::ExternalNoDoubleBuffer: return launch_external_no_double_buffer;
   }
@@ -446,10 +560,15 @@ LaunchFn select_launcher(KernelType type) {
 const char *kernel_name(KernelType type) {
   switch (type) {
     case KernelType::Custom:                 return "custom";
+    case KernelType::CutlassLikeStage5:      return "cutlass_stage5";
+    case KernelType::CutlassLikeStage5OneCta: return "cutlass_stage5_1cta";
+    case KernelType::CutlassLikeStage5WarpOrder: return "cutlass_stage5_wo";
+    case KernelType::CutlassLikeStage5Schedule:  return "cutlass_stage5_sched";
+    case KernelType::CutlassLikeStage5CopySchedule: return "cutlass_stage5_copy";
+    case KernelType::CutlassLikeStage5MmaOrder:  return "cutlass_stage5_mma";
+    case KernelType::CutlassRefStage5:       return "cutlass_ref";
     case KernelType::Naive:                  return "naive";
     case KernelType::CuBlas:                 return "cublas";
-    case KernelType::DoubleBuffer:           return "double_buffer";
-    case KernelType::Trial:                  return "trial";
     case KernelType::ExternalDoubleBuffer:   return "external_db";
     case KernelType::ExternalNoDoubleBuffer: return "external_nodb";
   }

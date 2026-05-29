@@ -1,4 +1,19 @@
 #include "sgemm_common.cuh"
+
+namespace custom::detail {
+__device__ __forceinline__ unsigned smem_addr(const void *ptr) {
+  return static_cast<unsigned>(__cvta_generic_to_shared(ptr));
+}
+
+__device__ __forceinline__ int swizzle_a_row_128x128x32(int logical_row,
+                                                        int k_index) {
+  int row_group = logical_row >> 2;
+  int row_inner = logical_row & 3;
+  int swizzled_group = (row_group & ~7) + ((row_group + (k_index >> 2)) & 7);
+  return (swizzled_group << 2) + row_inner;
+}
+} // namespace custom::detail
+
 __global__ void sgemm_128x128x32(int M, int N, int K,
                                  float const *__restrict__ A,
                                  float const *__restrict__ B,
@@ -61,25 +76,33 @@ __global__ void sgemm_128x128x32(int M, int N, int K,
     tArA[3] = FETCH_CONST_FLOAT4(
         gA[(load_A_row + 3 * 32) * AStride + load_A_col * 4]);
 
-    sA[(load_A_col * 4 + 0) * ASmemStride + (0 * 32 + load_A_row)] = tArA[0].x;
-    sA[(load_A_col * 4 + 1) * ASmemStride + (0 * 32 + load_A_row)] = tArA[0].y;
-    sA[(load_A_col * 4 + 2) * ASmemStride + (0 * 32 + load_A_row)] = tArA[0].z;
-    sA[(load_A_col * 4 + 3) * ASmemStride + (0 * 32 + load_A_row)] = tArA[0].w;
+    int load_A_k = load_A_col * 4;
+    int load_A_row_swizzled =
+        ((((load_A_row >> 2) + load_A_col) & 7) << 2) + (load_A_row & 3);
+    int load_A_row0 = 0 * 32 + load_A_row_swizzled;
+    int load_A_row1 = 1 * 32 + load_A_row_swizzled;
+    int load_A_row2 = 2 * 32 + load_A_row_swizzled;
+    int load_A_row3 = 3 * 32 + load_A_row_swizzled;
 
-    sA[(load_A_col * 4 + 0) * ASmemStride + (1 * 32 + load_A_row)] = tArA[1].x;
-    sA[(load_A_col * 4 + 1) * ASmemStride + (1 * 32 + load_A_row)] = tArA[1].y;
-    sA[(load_A_col * 4 + 2) * ASmemStride + (1 * 32 + load_A_row)] = tArA[1].z;
-    sA[(load_A_col * 4 + 3) * ASmemStride + (1 * 32 + load_A_row)] = tArA[1].w;
+    sA[(load_A_k + 0) * ASmemStride + load_A_row0] = tArA[0].x;
+    sA[(load_A_k + 1) * ASmemStride + load_A_row0] = tArA[0].y;
+    sA[(load_A_k + 2) * ASmemStride + load_A_row0] = tArA[0].z;
+    sA[(load_A_k + 3) * ASmemStride + load_A_row0] = tArA[0].w;
 
-    sA[(load_A_col * 4 + 0) * ASmemStride + (2 * 32 + load_A_row)] = tArA[2].x;
-    sA[(load_A_col * 4 + 1) * ASmemStride + (2 * 32 + load_A_row)] = tArA[2].y;
-    sA[(load_A_col * 4 + 2) * ASmemStride + (2 * 32 + load_A_row)] = tArA[2].z;
-    sA[(load_A_col * 4 + 3) * ASmemStride + (2 * 32 + load_A_row)] = tArA[2].w;
+    sA[(load_A_k + 0) * ASmemStride + load_A_row1] = tArA[1].x;
+    sA[(load_A_k + 1) * ASmemStride + load_A_row1] = tArA[1].y;
+    sA[(load_A_k + 2) * ASmemStride + load_A_row1] = tArA[1].z;
+    sA[(load_A_k + 3) * ASmemStride + load_A_row1] = tArA[1].w;
 
-    sA[(load_A_col * 4 + 0) * ASmemStride + (3 * 32 + load_A_row)] = tArA[3].x;
-    sA[(load_A_col * 4 + 1) * ASmemStride + (3 * 32 + load_A_row)] = tArA[3].y;
-    sA[(load_A_col * 4 + 2) * ASmemStride + (3 * 32 + load_A_row)] = tArA[3].z;
-    sA[(load_A_col * 4 + 3) * ASmemStride + (3 * 32 + load_A_row)] = tArA[3].w;
+    sA[(load_A_k + 0) * ASmemStride + load_A_row2] = tArA[2].x;
+    sA[(load_A_k + 1) * ASmemStride + load_A_row2] = tArA[2].y;
+    sA[(load_A_k + 2) * ASmemStride + load_A_row2] = tArA[2].z;
+    sA[(load_A_k + 3) * ASmemStride + load_A_row2] = tArA[2].w;
+
+    sA[(load_A_k + 0) * ASmemStride + load_A_row3] = tArA[3].x;
+    sA[(load_A_k + 1) * ASmemStride + load_A_row3] = tArA[3].y;
+    sA[(load_A_k + 2) * ASmemStride + load_A_row3] = tArA[3].z;
+    sA[(load_A_k + 3) * ASmemStride + load_A_row3] = tArA[3].w;
 
     int load_B_row = tid / (kBN / 4);
     int load_B_col = tid % (kBN / 4);
@@ -114,42 +137,38 @@ __global__ void sgemm_128x128x32(int M, int N, int K,
 
     float4 tCrA[2][MMA_K];
     float4 tCrB[2][MMA_K];
-
+// #pragma unroll
     for (int k_block = 0; k_block < kBK; k_block += MMA_K) {
+      int k_group0 = (k_block >> 2) & 7;
+      int k_group1 = ((k_block + 4) >> 2) & 7;
+      int a_row_group0 = tC_row;
+      int a_row_group1 = tC_row + 16;
+      int a_row0_g0 =
+          (((a_row_group0 & ~7) + ((a_row_group0 + k_group0) & 7)) << 2);
+      int a_row0_g1 =
+          (((a_row_group0 & ~7) + ((a_row_group0 + k_group1) & 7)) << 2);
+      int a_row1_g0 =
+          (((a_row_group1 & ~7) + ((a_row_group1 + k_group0) & 7)) << 2);
+      int a_row1_g1 =
+          (((a_row_group1 & ~7) + ((a_row_group1 + k_group1) & 7)) << 2);
 
-      tCrA[0][0] =
-          FETCH_FLOAT4(sA[(k_block + 0) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][1] =
-          FETCH_FLOAT4(sA[(k_block + 1) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][2] =
-          FETCH_FLOAT4(sA[(k_block + 2) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][3] =
-          FETCH_FLOAT4(sA[(k_block + 3) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][4] =
-          FETCH_FLOAT4(sA[(k_block + 4) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][5] =
-          FETCH_FLOAT4(sA[(k_block + 5) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][6] =
-          FETCH_FLOAT4(sA[(k_block + 6) * ASmemStride + tC_row * 4 + 0 * 64]);
-      tCrA[0][7] =
-          FETCH_FLOAT4(sA[(k_block + 7) * ASmemStride + tC_row * 4 + 0 * 64]);
+      tCrA[0][0] = FETCH_FLOAT4(sA[(k_block + 0) * ASmemStride + a_row0_g0]);
+      tCrA[0][1] = FETCH_FLOAT4(sA[(k_block + 1) * ASmemStride + a_row0_g0]);
+      tCrA[0][2] = FETCH_FLOAT4(sA[(k_block + 2) * ASmemStride + a_row0_g0]);
+      tCrA[0][3] = FETCH_FLOAT4(sA[(k_block + 3) * ASmemStride + a_row0_g0]);
+      tCrA[0][4] = FETCH_FLOAT4(sA[(k_block + 4) * ASmemStride + a_row0_g1]);
+      tCrA[0][5] = FETCH_FLOAT4(sA[(k_block + 5) * ASmemStride + a_row0_g1]);
+      tCrA[0][6] = FETCH_FLOAT4(sA[(k_block + 6) * ASmemStride + a_row0_g1]);
+      tCrA[0][7] = FETCH_FLOAT4(sA[(k_block + 7) * ASmemStride + a_row0_g1]);
 
-      tCrA[1][0] =
-          FETCH_FLOAT4(sA[(k_block + 0) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][1] =
-          FETCH_FLOAT4(sA[(k_block + 1) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][2] =
-          FETCH_FLOAT4(sA[(k_block + 2) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][3] =
-          FETCH_FLOAT4(sA[(k_block + 3) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][4] =
-          FETCH_FLOAT4(sA[(k_block + 4) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][5] =
-          FETCH_FLOAT4(sA[(k_block + 5) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][6] =
-          FETCH_FLOAT4(sA[(k_block + 6) * ASmemStride + tC_row * 4 + 1 * 64]);
-      tCrA[1][7] =
-          FETCH_FLOAT4(sA[(k_block + 7) * ASmemStride + tC_row * 4 + 1 * 64]);
+      tCrA[1][0] = FETCH_FLOAT4(sA[(k_block + 0) * ASmemStride + a_row1_g0]);
+      tCrA[1][1] = FETCH_FLOAT4(sA[(k_block + 1) * ASmemStride + a_row1_g0]);
+      tCrA[1][2] = FETCH_FLOAT4(sA[(k_block + 2) * ASmemStride + a_row1_g0]);
+      tCrA[1][3] = FETCH_FLOAT4(sA[(k_block + 3) * ASmemStride + a_row1_g0]);
+      tCrA[1][4] = FETCH_FLOAT4(sA[(k_block + 4) * ASmemStride + a_row1_g1]);
+      tCrA[1][5] = FETCH_FLOAT4(sA[(k_block + 5) * ASmemStride + a_row1_g1]);
+      tCrA[1][6] = FETCH_FLOAT4(sA[(k_block + 6) * ASmemStride + a_row1_g1]);
+      tCrA[1][7] = FETCH_FLOAT4(sA[(k_block + 7) * ASmemStride + a_row1_g1]);
 
       tCrB[0][0] =
           FETCH_FLOAT4(sB[(k_block + 0) * BSmemStride + tC_col * 4 + 0 * 64]);
@@ -247,3 +266,4 @@ __global__ void sgemm_128x128x32(int M, int N, int K,
   FETCH_FLOAT4(gC[(1 * 64 + tC_row * 4 + 3) * CStride + 1 * 64 + tC_col * 4]) =
       FETCH_FLOAT4(tCrC[7][4]);
 }
+

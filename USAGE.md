@@ -12,6 +12,16 @@ cmake --build .
 
 可执行文件位于 `build/learn_cuda`。
 
+如果在不同 GPU 上切换测试，建议重新指定 CUDA 架构，避免用错 SASS：
+
+```bash
+# A100
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=80
+
+# Ada / RTX 40 系列
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=89
+```
+
 ---
 
 ## 三种典型使用方式
@@ -66,13 +76,13 @@ verify max_abs_error=5.9604645e-08 max_rel_error=5.9604645e-08
 仅执行一次 kernel，输出 `C[0]` 和 checksum。适用于快速确认 kernel 能正常启动、不挂死。
 
 ```bash
-./learn_cuda --kernel double-buffer --size 256
+./learn_cuda --kernel external-nodb --size 256
 ```
 
 输出示例：
 
 ```
-double_buffer C[0]=0.01285375 checksum=-1.42908808
+external_nodb C[0]=0.01285375 checksum=-1.42908808
 ```
 
 > 不指定 `--kernel` 时，默认跑 `custom`。
@@ -87,7 +97,8 @@ double_buffer C[0]=0.01285375 checksum=-1.42908808
 | `--kernel <type>` | 指定要运行的 kernel（可多次指定） | `--kernel naive --kernel cublas` |
 | `--naive` | 等价于 `--kernel naive`（向后兼容） | `--naive` |
 | `--cublas` | 等价于 `--kernel cublas`（向后兼容） | `--cublas` |
-| `--double-buffer` | 等价于 `--kernel double-buffer`（向后兼容） | `--double-buffer` |
+| `--external-db` | 等价于 `--kernel external-db`（向后兼容） | `--external-db` |
+| `--external-nodb` | 等价于 `--kernel external-nodb`（向后兼容） | `--external-nodb` |
 | `--size <N>` | 同时设置 M=N=K | `--size 1024` |
 | `--m <M>` | 设置 M 维度 | `--m 1024` |
 | `--n <N>` | 设置 N 维度 | `--n 1024` |
@@ -105,9 +116,12 @@ double_buffer C[0]=0.01285375 checksum=-1.42908808
 | Kernel | 说明 |
 |--------|------|
 | `custom` | `sgemm_128x128x32`，手写共享内存 + float4 向量化 |
+| `cutlass-stage5` | 手写 CUTLASS-like 128x128x8 stage-5 SGEMM |
+| `cutlass-ref` | 同 binary 内的 CUTLASS SM80 SIMT 128x128x8 stage-5 参考 kernel |
 | `naive` | 最简全局内存实现，用于功能对照 |
 | `cublas` | NVIDIA cuBLAS 参考实现 |
-| `double-buffer` | `sgemm_128x128x32` 的双缓冲版本，使用动态共享内存 |
+| `external-db` | 外部 128x128x16 SGEMM，带共享内存双缓冲 |
+| `external-nodb` | 外部 128x128x16 SGEMM，不带共享内存双缓冲 |
 
 ---
 
