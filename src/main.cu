@@ -103,6 +103,7 @@ enum class KernelType {
   ExternalDoubleBuffer,
   ExternalNoDoubleBuffer,
   CuteHgemm,
+  CutlassHgemm,
   CuBlasHgemm,
 };
 
@@ -138,13 +139,14 @@ void print_usage(const char *program) {
     "  external-db   external 128x128x16 SGEMM with smem double buffering\n"
     "  external-nodb external 128x128x16 SGEMM without smem double buffering\n"
     "  cute-hgemm    cute 128x128x64 HGEMM with tensor cores\n"
+    "  cutlass-hgemm CUTLASS SM80 TensorOp HGEMM (A100 target)\n"
     "  cublas-hgemm  cuBLAS HGEMM reference\n"
     "\n"
     "Legacy flags (also supported):\n"
     "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
-    "--cute-hgemm, --cublas-hgemm\n";
+    "--cute-hgemm, --cutlass-hgemm, --cublas-hgemm\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -201,6 +203,7 @@ bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "external-db")              { *out = KernelType::ExternalDoubleBuffer;  return true; }
   if (value == "external-nodb")            { *out = KernelType::ExternalNoDoubleBuffer; return true; }
   if (value == "cute-hgemm")               { *out = KernelType::CuteHgemm;             return true; }
+  if (value == "cutlass-hgemm")            { *out = KernelType::CutlassHgemm;          return true; }
   if (value == "cublas-hgemm")             { *out = KernelType::CuBlasHgemm;           return true; }
   return false;
 }
@@ -234,6 +237,7 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--external-db")              { options->kernels.push_back(KernelType::ExternalDoubleBuffer);  continue; }
     if (arg == "--external-nodb")            { options->kernels.push_back(KernelType::ExternalNoDoubleBuffer); continue; }
     if (arg == "--cute-hgemm")               { options->kernels.push_back(KernelType::CuteHgemm);             continue; }
+    if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::CutlassHgemm);          continue; }
     if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::CuBlasHgemm);           continue; }
 
     if (auto value = read_option_value(argc, argv, &i, "--kernel")) {
@@ -243,7 +247,8 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "cutlass-stage5-1cta, cutlass-stage5-warporder, "
                      "cutlass-stage5-schedule, cutlass-stage5-copyorder, "
                      "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
-                     "external-db, external-nodb, cute-hgemm, cublas-hgemm\n";
+                     "external-db, external-nodb, cute-hgemm, cutlass-hgemm, "
+                     "cublas-hgemm\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -609,6 +614,7 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::ExternalDoubleBuffer:   return launch_external_double_buffer;
     case KernelType::ExternalNoDoubleBuffer: return launch_external_no_double_buffer;
     case KernelType::CuteHgemm:
+    case KernelType::CutlassHgemm:
     case KernelType::CuBlasHgemm:
       return nullptr;
   }
@@ -616,7 +622,9 @@ LaunchFn select_launcher(KernelType type) {
 }
 
 bool is_hgemm_kernel(KernelType type) {
-  return type == KernelType::CuteHgemm || type == KernelType::CuBlasHgemm;
+  return type == KernelType::CuteHgemm ||
+         type == KernelType::CutlassHgemm ||
+         type == KernelType::CuBlasHgemm;
 }
 
 using HalfLaunchFn = bool(*)(const Options &, cute::half_t *, cute::half_t *, cute::half_t *);
@@ -632,6 +640,26 @@ bool launch_cute_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
       A, B, C, options.m, options.n, options.k);
   if (err != cudaSuccess) {
     std::cerr << "cute-hgemm launch failed: " << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_hgemm(const Options &options, cute::half_t *A,
+                          cute::half_t *B, cute::half_t *C) {
+  if (options.n % 8 != 0 || options.k % 8 != 0) {
+    std::cerr << "cutlass-hgemm requires N and K to be multiples of 8.\n";
+    return false;
+  }
+
+  auto *cutlass_A = reinterpret_cast<cutlass::half_t *>(A);
+  auto *cutlass_B = reinterpret_cast<cutlass::half_t *>(B);
+  auto *cutlass_C = reinterpret_cast<cutlass::half_t *>(C);
+  cutlass::Status status = cutlass_hgemm::launch_hgemm_sm80_tensorop(
+      cutlass_A, cutlass_B, cutlass_C, options.m, options.n, options.k);
+  if (status != cutlass::Status::kSuccess) {
+    std::cerr << "cutlass-hgemm failed: "
+              << cutlass::cutlassGetStatusString(status) << '\n';
     return false;
   }
   return CUDA_CHECK(cudaGetLastError());
@@ -664,9 +692,10 @@ bool launch_cublas_hgemm(const Options &options, cute::half_t *A, cute::half_t *
 
 HalfLaunchFn select_half_launcher(KernelType type) {
   switch (type) {
-    case KernelType::CuteHgemm:    return launch_cute_hgemm;
-    case KernelType::CuBlasHgemm:  return launch_cublas_hgemm;
-    default:                       return nullptr;
+    case KernelType::CuteHgemm:     return launch_cute_hgemm;
+    case KernelType::CutlassHgemm:  return launch_cutlass_hgemm;
+    case KernelType::CuBlasHgemm:   return launch_cublas_hgemm;
+    default:                        return nullptr;
   }
 }
 
@@ -685,6 +714,7 @@ const char *kernel_name(KernelType type) {
     case KernelType::ExternalDoubleBuffer:   return "external_db";
     case KernelType::ExternalNoDoubleBuffer: return "external_nodb";
     case KernelType::CuteHgemm:              return "cute_hgemm";
+    case KernelType::CutlassHgemm:           return "cutlass_hgemm";
     case KernelType::CuBlasHgemm:            return "cublas_hgemm";
   }
   return "unknown";
