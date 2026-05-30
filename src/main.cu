@@ -31,6 +31,7 @@ inline bool cuda_check(cudaError_t error, const char *call) {
 // RAII wrappers
 // ---------------------------------------------------------------------------
 
+template <typename T>
 class DeviceBuffer {
 public:
   DeviceBuffer() = default;
@@ -39,11 +40,11 @@ public:
   ~DeviceBuffer() { if (ptr_) cudaFree(ptr_); }
 
   bool allocate(std::size_t elements, const char *name) {
-    return cuda_check(cudaMalloc(&ptr_, elements * sizeof(float)), name);
+    return cuda_check(cudaMalloc(&ptr_, elements * sizeof(T)), name);
   }
-  float *get() const { return ptr_; }
+  T *get() const { return ptr_; }
 private:
-  float *ptr_ = nullptr;
+  T *ptr_ = nullptr;
 };
 
 class CudaEventTimer {
@@ -101,6 +102,8 @@ enum class KernelType {
   CuBlas,
   ExternalDoubleBuffer,
   ExternalNoDoubleBuffer,
+  CuteHgemm,
+  CuBlasHgemm,
 };
 
 struct Options {
@@ -134,11 +137,14 @@ void print_usage(const char *program) {
     "  cublas        cuBLAS reference\n"
     "  external-db   external 128x128x16 SGEMM with smem double buffering\n"
     "  external-nodb external 128x128x16 SGEMM without smem double buffering\n"
+    "  cute-hgemm    cute 128x128x64 HGEMM with tensor cores\n"
+    "  cublas-hgemm  cuBLAS HGEMM reference\n"
     "\n"
     "Legacy flags (also supported):\n"
     "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
-    "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref\n";
+    "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
+    "--cute-hgemm, --cublas-hgemm\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -194,6 +200,8 @@ bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "cublas")                   { *out = KernelType::CuBlas;            return true; }
   if (value == "external-db")              { *out = KernelType::ExternalDoubleBuffer;  return true; }
   if (value == "external-nodb")            { *out = KernelType::ExternalNoDoubleBuffer; return true; }
+  if (value == "cute-hgemm")               { *out = KernelType::CuteHgemm;             return true; }
+  if (value == "cublas-hgemm")             { *out = KernelType::CuBlasHgemm;           return true; }
   return false;
 }
 
@@ -225,6 +233,8 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--cutlass-ref")              { options->kernels.push_back(KernelType::CutlassRefStage5);  continue; }
     if (arg == "--external-db")              { options->kernels.push_back(KernelType::ExternalDoubleBuffer);  continue; }
     if (arg == "--external-nodb")            { options->kernels.push_back(KernelType::ExternalNoDoubleBuffer); continue; }
+    if (arg == "--cute-hgemm")               { options->kernels.push_back(KernelType::CuteHgemm);             continue; }
+    if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::CuBlasHgemm);           continue; }
 
     if (auto value = read_option_value(argc, argv, &i, "--kernel")) {
       KernelType kt;
@@ -233,7 +243,7 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "cutlass-stage5-1cta, cutlass-stage5-warporder, "
                      "cutlass-stage5-schedule, cutlass-stage5-copyorder, "
                      "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
-                     "external-db, external-nodb\n";
+                     "external-db, external-nodb, cute-hgemm, cublas-hgemm\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -366,6 +376,51 @@ bool verify_against_reference(const std::vector<float> &host_C,
   std::cout << "verify max_abs_error=" << max_abs_error
             << " max_rel_error=" << max_rel_error << '\n';
   return max_abs_error < 1.0e-3 || max_rel_error < 1.0e-3;
+}
+
+// ---------------------------------------------------------------------------
+// Half-precision data utilities
+// ---------------------------------------------------------------------------
+
+double checksum_half(const std::vector<cute::half_t> &values) {
+  double sum = 0.0;
+  for (cute::half_t v : values) sum += static_cast<double>(v);
+  return sum;
+}
+
+std::vector<cute::half_t> compute_reference_half(
+    int m, int n, int k,
+    const std::vector<cute::half_t> &A,
+    const std::vector<cute::half_t> &B) {
+  std::vector<cute::half_t> C(matrix_elements(m, n), cute::half_t(0.0F));
+  for (int i = 0; i < m; ++i) {
+    for (int j = 0; j < n; ++j) {
+      double acc = 0.0;
+      for (int l = 0; l < k; ++l) {
+        acc += static_cast<double>(A[i * k + l]) *
+               static_cast<double>(B[l * n + j]);
+      }
+      C[i * n + j] = cute::half_t(static_cast<float>(acc));
+    }
+  }
+  return C;
+}
+
+bool verify_half_against_reference(const std::vector<cute::half_t> &host_C,
+                                   const std::vector<cute::half_t> &ref_C) {
+  double max_abs_error = 0.0;
+  double max_rel_error = 0.0;
+  for (std::size_t i = 0; i < host_C.size(); ++i) {
+    const double actual   = static_cast<double>(host_C[i]);
+    const double expected = static_cast<double>(ref_C[i]);
+    const double abs_error = std::abs(actual - expected);
+    const double rel_error = abs_error / std::max(1.0, std::abs(expected));
+    max_abs_error = std::max(max_abs_error, abs_error);
+    max_rel_error = std::max(max_rel_error, rel_error);
+  }
+  std::cout << "verify max_abs_error=" << max_abs_error
+            << " max_rel_error=" << max_rel_error << '\n';
+  return max_abs_error < 2.0e-1 || max_rel_error < 2.0e-1;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,8 +608,66 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::CuBlas:                 return launch_cublas;
     case KernelType::ExternalDoubleBuffer:   return launch_external_double_buffer;
     case KernelType::ExternalNoDoubleBuffer: return launch_external_no_double_buffer;
+    case KernelType::CuteHgemm:
+    case KernelType::CuBlasHgemm:
+      return nullptr;
   }
   return launch_custom;
+}
+
+bool is_hgemm_kernel(KernelType type) {
+  return type == KernelType::CuteHgemm || type == KernelType::CuBlasHgemm;
+}
+
+using HalfLaunchFn = bool(*)(const Options &, cute::half_t *, cute::half_t *, cute::half_t *);
+
+bool launch_cute_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
+                       cute::half_t *C) {
+  if (options.m % 128 != 0 || options.n % 128 != 0 || options.k % 64 != 0) {
+    std::cerr << "cute-hgemm requires M and N to be multiples of 128, "
+                 "and K to be a multiple of 64.\n";
+    return false;
+  }
+  cudaError_t err = cute_hgemm::launch_hgemm_128x128_nn(
+      A, B, C, options.m, options.n, options.k);
+  if (err != cudaSuccess) {
+    std::cerr << "cute-hgemm launch failed: " << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cublas_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
+                         cute::half_t *C) {
+  static CuBlasHandle handle;
+  if (!handle.ok()) {
+    std::cerr << "cublasCreate failed\n";
+    return false;
+  }
+  __half alpha = __float2half(1.0F);
+  __half beta  = __float2half(0.0F);
+  cublasStatus_t status = cublasGemmEx(
+      handle.get(), CUBLAS_OP_N, CUBLAS_OP_N,
+      options.n, options.m, options.k,
+      &alpha,
+      B, CUDA_R_16F, options.n,
+      A, CUDA_R_16F, options.k,
+      &beta,
+      C, CUDA_R_16F, options.n,
+      CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    std::cerr << "cublasGemmEx (HGEMM) failed\n";
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+HalfLaunchFn select_half_launcher(KernelType type) {
+  switch (type) {
+    case KernelType::CuteHgemm:    return launch_cute_hgemm;
+    case KernelType::CuBlasHgemm:  return launch_cublas_hgemm;
+    default:                       return nullptr;
+  }
 }
 
 const char *kernel_name(KernelType type) {
@@ -571,6 +684,8 @@ const char *kernel_name(KernelType type) {
     case KernelType::CuBlas:                 return "cublas";
     case KernelType::ExternalDoubleBuffer:   return "external_db";
     case KernelType::ExternalNoDoubleBuffer: return "external_nodb";
+    case KernelType::CuteHgemm:              return "cute_hgemm";
+    case KernelType::CuBlasHgemm:            return "cublas_hgemm";
   }
   return "unknown";
 }
@@ -627,10 +742,56 @@ BenchmarkResult run_benchmark(const Options &options, KernelType kt, LaunchFn la
   return result;
 }
 
+bool run_once_half(const Options &options, HalfLaunchFn launch,
+                   cute::half_t *A, cute::half_t *B, cute::half_t *C) {
+  if (!launch(options, A, B, C)) return false;
+  return CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+BenchmarkResult run_benchmark_half(const Options &options, KernelType kt,
+                                   HalfLaunchFn launch,
+                                   cute::half_t *A, cute::half_t *B,
+                                   cute::half_t *C) {
+  BenchmarkResult result{};
+
+  for (int i = 0; i < options.warmup; i++) {
+    if (!launch(options, A, B, C)) return result;
+  }
+  if (!CUDA_CHECK(cudaDeviceSynchronize())) return result;
+
+  CudaEventTimer timer;
+  if (!timer.record_start()) return result;
+
+  for (int i = 0; i < options.iterations; i++) {
+    if (!launch(options, A, B, C)) return result;
+  }
+
+  if (!timer.record_stop_and_sync()) return result;
+
+  float elapsed_ms = 0.0F;
+  if (!timer.elapsed_ms(&elapsed_ms)) return result;
+
+  result.avg_ms = static_cast<double>(elapsed_ms) / static_cast<double>(options.iterations);
+  const double flops = 2.0 * static_cast<double>(options.m) *
+                       static_cast<double>(options.n) *
+                       static_cast<double>(options.k);
+  result.tflops = flops / (result.avg_ms * 1.0e-3) / 1.0e12;
+
+  std::cout << std::fixed << std::setprecision(4)
+            << std::left << std::setw(15) << kernel_name(kt)
+            << " M=" << options.m << " N=" << options.n << " K=" << options.k
+            << " warmup=" << options.warmup
+            << " iters=" << options.iterations
+            << " avg_ms=" << result.avg_ms
+            << " TFLOP/s=" << result.tflops << '\n';
+  return result;
+}
+
 void print_comparison(const std::vector<std::pair<KernelType, BenchmarkResult>> &results) {
   std::size_t baseline_idx = 0;
   for (std::size_t i = 0; i < results.size(); ++i) {
-    if (results[i].first == KernelType::CuBlas) {
+    if (results[i].first == KernelType::CuBlas ||
+        results[i].first == KernelType::CuBlasHgemm) {
       baseline_idx = i;
       break;
     }
@@ -667,6 +828,14 @@ int main(int argc, char **argv) {
   const std::size_t elements_B = matrix_elements(options.k, options.n);
   const std::size_t elements_C = matrix_elements(options.m, options.n);
 
+  bool needs_hgemm = false;
+  for (KernelType kt : options.kernels) {
+    if (is_hgemm_kernel(kt)) {
+      needs_hgemm = true;
+      break;
+    }
+  }
+
   std::mt19937 rng(options.seed);
   std::vector<float> host_A(elements_A);
   std::vector<float> host_B(elements_B);
@@ -675,7 +844,7 @@ int main(int argc, char **argv) {
   fill_random(&host_A, options.k, &rng);
   fill_random(&host_B, options.k, &rng);
 
-  DeviceBuffer device_A, device_B, device_C;
+  DeviceBuffer<float> device_A, device_B, device_C;
   if (!device_A.allocate(elements_A, "cudaMalloc A") ||
       !device_B.allocate(elements_B, "cudaMalloc B") ||
       !device_C.allocate(elements_C, "cudaMalloc C")) {
@@ -689,42 +858,109 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Half-precision host buffers and device buffers
+  std::vector<cute::half_t> host_A_h, host_B_h, host_C_h;
+  DeviceBuffer<cute::half_t> device_A_h, device_B_h, device_C_h;
+  if (needs_hgemm) {
+    host_A_h.resize(elements_A);
+    host_B_h.resize(elements_B);
+    host_C_h.resize(elements_C, cute::half_t(0.0F));
+    for (std::size_t i = 0; i < elements_A; ++i)
+      host_A_h[i] = cute::half_t(host_A[i]);
+    for (std::size_t i = 0; i < elements_B; ++i)
+      host_B_h[i] = cute::half_t(host_B[i]);
+
+    if (!device_A_h.allocate(elements_A, "cudaMalloc A_h") ||
+        !device_B_h.allocate(elements_B, "cudaMalloc B_h") ||
+        !device_C_h.allocate(elements_C, "cudaMalloc C_h")) {
+      return 1;
+    }
+
+    if (!CUDA_CHECK(cudaMemcpy(device_A_h.get(), host_A_h.data(),
+                               elements_A * sizeof(cute::half_t),
+                               cudaMemcpyHostToDevice)) ||
+        !CUDA_CHECK(cudaMemcpy(device_B_h.get(), host_B_h.data(),
+                               elements_B * sizeof(cute::half_t),
+                               cudaMemcpyHostToDevice))) {
+      return 1;
+    }
+  }
+
   // Pre-compute CPU reference if verification is requested.
   std::optional<std::vector<float>> cpu_ref;
+  std::optional<std::vector<cute::half_t>> cpu_ref_h;
   if (options.verify) {
     cpu_ref = compute_reference(options.m, options.n, options.k, host_A, host_B);
+    if (needs_hgemm) {
+      cpu_ref_h = compute_reference_half(options.m, options.n, options.k,
+                                         host_A_h, host_B_h);
+    }
   }
 
   std::vector<std::pair<KernelType, BenchmarkResult>> benchmark_results;
 
   for (KernelType kt : options.kernels) {
-    LaunchFn launch = select_launcher(kt);
+    if (is_hgemm_kernel(kt)) {
+      HalfLaunchFn launch = select_half_launcher(kt);
 
-    if (options.benchmark) {
-      auto result = run_benchmark(options, kt, launch,
-                                  device_A.get(), device_B.get(), device_C.get());
-      if (result.tflops <= 0.0) return 1;
-      benchmark_results.emplace_back(kt, result);
-    } else {
-      if (!run_once(options, launch,
-                    device_A.get(), device_B.get(), device_C.get())) {
+      if (options.benchmark) {
+        auto result = run_benchmark_half(options, kt, launch,
+                                         device_A_h.get(), device_B_h.get(),
+                                         device_C_h.get());
+        if (result.tflops <= 0.0) return 1;
+        benchmark_results.emplace_back(kt, result);
+      } else {
+        if (!run_once_half(options, launch,
+                           device_A_h.get(), device_B_h.get(), device_C_h.get())) {
+          return 1;
+        }
+      }
+
+      if (!CUDA_CHECK(cudaMemcpy(host_C_h.data(), device_C_h.get(),
+                                 elements_C * sizeof(cute::half_t),
+                                 cudaMemcpyDeviceToHost))) {
         return 1;
       }
-    }
 
-    if (!CUDA_CHECK(cudaMemcpy(host_C.data(), device_C.get(),
-                               elements_C * sizeof(float), cudaMemcpyDeviceToHost))) {
-      return 1;
-    }
+      std::cout << std::setprecision(8)
+                << kernel_name(kt) << " C[0]=" << static_cast<float>(host_C_h.front())
+                << " checksum=" << checksum_half(host_C_h) << '\n';
 
-    std::cout << std::setprecision(8)
-              << kernel_name(kt) << " C[0]=" << host_C.front()
-              << " checksum=" << checksum(host_C) << '\n';
+      if (options.verify && cpu_ref_h.has_value()) {
+        if (!verify_half_against_reference(host_C_h, *cpu_ref_h)) {
+          std::cerr << "Verification FAILED for " << kernel_name(kt) << "\n";
+          return 1;
+        }
+      }
+    } else {
+      LaunchFn launch = select_launcher(kt);
 
-    if (options.verify && cpu_ref.has_value()) {
-      if (!verify_against_reference(host_C, *cpu_ref)) {
-        std::cerr << "Verification FAILED for " << kernel_name(kt) << "\n";
+      if (options.benchmark) {
+        auto result = run_benchmark(options, kt, launch,
+                                    device_A.get(), device_B.get(), device_C.get());
+        if (result.tflops <= 0.0) return 1;
+        benchmark_results.emplace_back(kt, result);
+      } else {
+        if (!run_once(options, launch,
+                      device_A.get(), device_B.get(), device_C.get())) {
+          return 1;
+        }
+      }
+
+      if (!CUDA_CHECK(cudaMemcpy(host_C.data(), device_C.get(),
+                                 elements_C * sizeof(float), cudaMemcpyDeviceToHost))) {
         return 1;
+      }
+
+      std::cout << std::setprecision(8)
+                << kernel_name(kt) << " C[0]=" << host_C.front()
+                << " checksum=" << checksum(host_C) << '\n';
+
+      if (options.verify && cpu_ref.has_value()) {
+        if (!verify_against_reference(host_C, *cpu_ref)) {
+          std::cerr << "Verification FAILED for " << kernel_name(kt) << "\n";
+          return 1;
+        }
       }
     }
   }

@@ -7,3 +7,4 @@
 #include "kernels/sgemm_external_128x128x16.cuh"
 #include "kernels/cutlass_like_sgemm_128x128x8stage5.cuh"
 #include "kernels/cutlass_ref_sgemm_128x128x8stage5.cuh"
+#include "kernels/cute_hgemm_128x128_nn.cuh"

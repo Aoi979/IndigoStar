@@ -2,7 +2,7 @@
 
 #include <cuda_runtime.h>
 
-#include "../../ref/cute_ampere_hgemm_16816.cuh"
+#include "cute_ampere_hgemm_16816.cuh"
 
 namespace cute_hgemm {
 
@@ -38,11 +38,11 @@ inline cudaError_t launch_hgemm_128x128_nn(const cute::half_t *A,
   auto sC = make_layout(make_shape(bM, bN), make_stride(Int<136>{}, Int<1>{}));
 
   TiledCopy copyA = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
+      cute::Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
       Layout<Shape<_16, _8>, Stride<_8, _1>>{},
       Layout<Shape<_1, _8>>{});
   TiledCopy copyB = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
+      cute::Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, cute::half_t>{},
       Layout<Shape<_16, _8>, Stride<_1, _16>>{},
       Layout<Shape<_8, _1>>{});
 
@@ -50,8 +50,8 @@ inline cudaError_t launch_hgemm_128x128_nn(const cute::half_t *A,
                                  Layout<Shape<_2, _2>>{},
                                  Tile<_32, _32, _16>{});
 
-  Copy_Atom<SM75_U32x4_LDSM_N, half_t> s2r_atom_A;
-  Copy_Atom<SM75_U16x8_LDSM_T, half_t> s2r_atom_B;
+  cute::Copy_Atom<SM75_U32x4_LDSM_N, half_t> s2r_atom_A;
+  cute::Copy_Atom<SM75_U16x8_LDSM_T, half_t> s2r_atom_B;
 
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -76,12 +76,21 @@ inline cudaError_t launch_hgemm_128x128_nn(const cute::half_t *A,
                              100);
   if (err != cudaSuccess) return err;
 
+  // Block swizzle: adjacent CTAs in the same strip reuse A rows.
+  // Use exact division when tile_n_count is a multiple of swizzle to avoid
+  // empty CTAs; otherwise fall back to ceil_div.
+  constexpr int kBlockSwizzle = 8;
+  int tile_m_count = size(ceil_div(M, bM));
+  int tile_n_count = size(ceil_div(N, bN));
   dim3 dimBlock(size(mmaC));
-  dim3 dimGrid(size(ceil_div(M, bM)), size(ceil_div(N, bN)));
+  int grid_y = (tile_n_count % kBlockSwizzle == 0)
+                   ? (tile_n_count / kBlockSwizzle)
+                   : (tile_n_count + kBlockSwizzle - 1) / kBlockSwizzle;
+  dim3 dimGrid(tile_m_count * kBlockSwizzle, grid_y);
 
   kernel_fptr<<<dimGrid, dimBlock, smem_size, stream>>>(
       prob_shape, cta_tiler, A, dA, sA, copyA, s2r_atom_A, B, dB, sB, copyB,
-      s2r_atom_B, C, dC, sC, mmaC, alpha, beta);
+      s2r_atom_B, C, dC, sC, mmaC, alpha, beta, kBlockSwizzle);
 
   return cudaGetLastError();
 }
