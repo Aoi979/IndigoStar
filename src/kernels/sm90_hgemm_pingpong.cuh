@@ -368,6 +368,13 @@ constexpr int kNumMmaWarpGroups = 2;
 constexpr int kNumWarpGroups = 1 + kNumMmaWarpGroups;
 constexpr int kThreads = kNumWarpGroups * kWarpGroupSize;
 constexpr int kInstM = 64;
+constexpr int kClusterM = 2;
+constexpr int kClusterN = 1;
+constexpr int kClusterK = 1;
+constexpr int kBlockNPerClusterM = kBlockN / kClusterM;
+constexpr uint64_t kTmaCacheHintEvictLast = 0x14F0000000000000ull;
+static_assert(kBlockN % kClusterM == 0);
+static_assert(kClusterN == 1);
 
 struct SharedStorage {
   alignas(128) Element A[kBlockM * kBlockK * kStages];
@@ -413,19 +420,23 @@ inline cudaError_t make_b_row_major_tensor_map(CUtensorMap *map,
                                                Element const *ptr,
                                                int n,
                                                int k) {
+  static_assert(BlockN >= 64);
+  static_assert(BlockN % 64 == 0);
   static_assert(BlockK >= 64);
-  static_assert(BlockK % 64 == 0);
-  if (map == nullptr || ptr == nullptr || n <= 0 || k <= 0 || k % 64 != 0) {
+  if (map == nullptr || ptr == nullptr || n <= 0 || k <= 0 ||
+      n % 64 != 0) {
     return cudaErrorInvalidValue;
   }
 
   // Logical tensor is B(n, k) with stride (1, N), backed by row-major B[k][n].
-  uint64_t shape[] = {64, static_cast<uint64_t>(n),
-                      static_cast<uint64_t>(k / 64)};
-  uint64_t stride[] = {sizeof(Element),
-                       64ull * static_cast<uint64_t>(n) * sizeof(Element)};
-  uint32_t box_shape[] = {64u, static_cast<uint32_t>(BlockN),
-                          static_cast<uint32_t>(BlockK / 64)};
+  // Keep the innermost TMA dimension at 64 half elements so each slice is a
+  // 128B contiguous segment along the physical N-major access direction.
+  uint64_t shape[] = {64, static_cast<uint64_t>(n / 64),
+                      static_cast<uint64_t>(k)};
+  uint64_t stride[] = {64ull * sizeof(Element),
+                       static_cast<uint64_t>(n) * sizeof(Element)};
+  uint32_t box_shape[] = {64u, static_cast<uint32_t>(BlockN / 64),
+                          static_cast<uint32_t>(BlockK)};
   uint32_t box_stride[] = {1u, 1u, 1u};
 
   CUresult result = cuTensorMapEncodeTiled(
@@ -550,6 +561,10 @@ __device__ __forceinline__ void expect_tma_bytes(uint64_t *bar,
                ::"r"(bar_ptr), "r"(bytes));
 }
 
+__device__ __forceinline__ void fence_barrier_init() {
+  asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
 __device__ __forceinline__ void tma_load(Element *dst,
                                          void const *tensor_map,
                                          uint64_t *bar,
@@ -566,6 +581,33 @@ __device__ __forceinline__ void tma_load(Element *dst,
       : "memory");
 }
 
+__device__ __forceinline__ void tma_load_b_multicast(Element *dst,
+                                                     void const *tensor_map,
+                                                     uint64_t *bar,
+                                                     uint16_t multicast_mask,
+                                                     int global_k,
+                                                     int global_n) {
+  uint64_t map_ptr = reinterpret_cast<uint64_t>(tensor_map);
+  uint32_t dst_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(dst));
+  uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
+  asm volatile(
+      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster.L2::cache_hint"
+      " [%0], [%1, {%4, %5, %6}], [%2], %3, %7;\n" ::"r"(dst_ptr),
+      "l"(map_ptr), "r"(bar_ptr), "h"(multicast_mask), "n"(0),
+      "r"(global_n / 64), "r"(global_k), "l"(kTmaCacheHintEvictLast)
+      : "memory");
+}
+
+__device__ __forceinline__ uint16_t multicast_mask_b_cluster_m() {
+  uint16_t mask = 0;
+  uint32_t cta_n = ::block_id_in_cluster().y;
+#pragma unroll
+  for (uint32_t m = 0; m < kClusterM; ++m) {
+    mask |= uint16_t{1u} << (m * kClusterN + cta_n);
+  }
+  return mask;
+}
+
 __device__ __forceinline__ void tma_store(void const *tensor_map,
                                           Element *src,
                                           int global_row,
@@ -576,6 +618,24 @@ __device__ __forceinline__ void tma_store(void const *tensor_map,
                " [%0, {%2, %3, %4}], [%1];\n" ::"l"(map_ptr),
                "r"(src_ptr), "n"(0), "r"(global_row), "r"(global_col / 64)
                : "memory");
+}
+
+__device__ __forceinline__ void arrive_barrier_remote(uint64_t *bar,
+                                                      uint32_t dst_cta_rank) {
+  uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
+  asm volatile("{\n"
+               ".reg .b32 remote_bar;\n"
+               "mapa.shared::cluster.u32 remote_bar, %0, %1;\n"
+               "mbarrier.arrive.shared::cluster.b64 _, [remote_bar];\n"
+               "}\n" ::"r"(bar_ptr),
+               "r"(dst_cta_rank)
+               : "memory");
+}
+
+__device__ __forceinline__ void arrive_cluster_empty_barrier(uint64_t *bar) {
+  uint32_t rank = ::block_rank_in_cluster();
+  arrive_barrier(bar);
+  arrive_barrier_remote(bar, rank ^ 1u);
 }
 
 __device__ __forceinline__ void tma_commit_group() {
@@ -673,7 +733,7 @@ __device__ __forceinline__ void consume_k_tile(SharedStorage &smem,
   if constexpr (ReleaseStages) {
     wgmma_wait_group<1>();
     if (warp_group_thread_idx == 0) {
-      arrive_barrier(&empty_barriers[previous_stage]);
+      arrive_cluster_empty_barrier(&empty_barriers[previous_stage]);
     }
   }
   previous_stage = stage;
@@ -690,7 +750,7 @@ __device__ __forceinline__ void drain_invalid_tile(uint64_t *full_barriers,
     int current_stage = stage;
     wait_barrier(&full_barriers[current_stage], phase);
     if (warp_group_thread_idx == 0) {
-      arrive_barrier(&empty_barriers[current_stage]);
+      arrive_cluster_empty_barrier(&empty_barriers[current_stage]);
     }
     stage_next(stage, phase);
   }
@@ -727,7 +787,7 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
   if (thread_idx == 0) {
     for (int i = 0; i < kStages; ++i) {
       init_barrier(&full_barriers[i], 1);
-      init_barrier(&empty_barriers[i], 1);
+      init_barrier(&empty_barriers[i], kClusterM * kClusterN);
     }
     init_barrier(&math_turn[0], 1);
     init_barrier(&math_turn[1], 1);
@@ -735,6 +795,8 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
     init_barrier(&epilogue_turn[1], 1);
   }
   __syncthreads();
+  fence_barrier_init();
+  ::cluster_sync();
 
   int const k_tiles = K / kBlockK;
   GemmPersistentTileScheduler scheduler(scheduler_params);
@@ -755,22 +817,51 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
     if (warp_group_thread_idx == 0) {
       int stage = 0;
       int phase = 0;
-      constexpr uint32_t load_bytes =
-          sizeof(Element) * (kBlockM * kBlockK + kBlockK * kBlockN);
+      uint32_t const cluster_rank = ::block_rank_in_cluster();
+      uint32_t const cluster_m_rank = ::block_id_in_cluster().x;
+      uint16_t const b_multicast_mask = multicast_mask_b_cluster_m();
+      constexpr uint32_t load_bytes_a =
+          sizeof(Element) * kBlockM * kBlockK;
+      constexpr uint32_t load_bytes_b =
+          sizeof(Element) * kBlockK * kBlockN;
 
       for (GemmTile tile = scheduler.current(); tile.valid;
            tile = scheduler.next_producer_tile()) {
         for (int k_tile = 0; k_tile < k_tiles; ++k_tile) {
           wait_barrier(&empty_barriers[stage], phase);
+          bool const has_valid_b_tile =
+              tile.valid && tile.n >= 0 &&
+              static_cast<uint32_t>(tile.n) <
+                  scheduler_params.logical_tiles_n;
+          uint32_t expected_bytes = 0;
           if (tile.in_bounds) {
-            expect_tma_bytes(&full_barriers[stage], load_bytes);
+            expected_bytes += load_bytes_a;
+          }
+          if (has_valid_b_tile &&
+              (b_multicast_mask & (uint16_t{1u} << cluster_rank)) != 0) {
+            expected_bytes += load_bytes_b;
+          }
+
+          if (expected_bytes != 0) {
+            expect_tma_bytes(&full_barriers[stage], expected_bytes);
+          }
+          if (tile.in_bounds) {
             tma_load(&smem.A[stage * kBlockM * kBlockK], &tensor_map_a,
                      &full_barriers[stage], k_tile * kBlockK,
                      tile.m * kBlockM);
-            tma_load(&smem.B[stage * kBlockN * kBlockK], &tensor_map_b,
-                     &full_barriers[stage], k_tile * kBlockK,
-                     tile.n * kBlockN);
-          } else {
+          }
+          if (has_valid_b_tile && b_multicast_mask != 0) {
+            // CUTLASS-style B multicast: each M-rank issues one N slice.
+            Element *b_slice =
+                &smem.B[stage * kBlockN * kBlockK +
+                        cluster_m_rank * kBlockNPerClusterM * kBlockK];
+            int b_global_n =
+                tile.n * kBlockN + cluster_m_rank * kBlockNPerClusterM;
+            tma_load_b_multicast(b_slice, &tensor_map_b,
+                                 &full_barriers[stage], b_multicast_mask,
+                                 k_tile * kBlockK, b_global_n);
+          }
+          if (expected_bytes == 0) {
             arrive_barrier(&full_barriers[stage]);
           }
           stage_next(stage, phase);
@@ -789,7 +880,7 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
 
   if (consumer_idx == 0 && warp_group_thread_idx == 0) {
     for (int i = 0; i < kStages; ++i) {
-      arrive_barrier(&empty_barriers[i]);
+      arrive_cluster_empty_barrier(&empty_barriers[i]);
     }
   }
 
@@ -834,7 +925,7 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
     }
     wgmma_wait_group<0>();
     if (warp_group_thread_idx == 0) {
-      arrive_barrier(&empty_barriers[previous_stage]);
+      arrive_cluster_empty_barrier(&empty_barriers[previous_stage]);
     }
 
     stage_advance(stage, phase, k_tiles);
@@ -907,27 +998,34 @@ inline cudaError_t launch_hgemm_128x128x64_pingpong(
     return cudaErrorInvalidValue;
   }
 
-  PersistentTileSchedulerSm90Params scheduler;
-  scheduler.initialize(M, N, kBlockM, kBlockN, 1, 1, 1, max_swizzle_size,
-                       raster_order);
-
-  // The kernel handles padded scheduler tiles, but keeping the launch wrapper
-  // strict makes benchmarking behavior match the fixed-shape HGEMM kernels in
-  // this repo.
-  if (scheduler.blocks_per_problem !=
-      uint64_t{scheduler.logical_tiles_m} * scheduler.logical_tiles_n) {
-    return cudaErrorInvalidValue;
+  int device = 0;
+  cudaError_t err = cudaGetDevice(&device);
+  if (err != cudaSuccess) {
+    return err;
   }
+  int cluster_launch = 0;
+  err = cudaDeviceGetAttribute(&cluster_launch, cudaDevAttrClusterLaunch,
+                               device);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (cluster_launch == 0) {
+    return cudaErrorInvalidDeviceFunction;
+  }
+
+  PersistentTileSchedulerSm90Params scheduler;
+  scheduler.initialize(M, N, kBlockM, kBlockN, 1, kClusterM, kClusterN,
+                       max_swizzle_size, raster_order);
 
   CUtensorMap map_a;
   CUtensorMap map_b;
   CUtensorMap map_c;
-  cudaError_t err =
-      make_row_major_tensor_map<kBlockM, kBlockK>(&map_a, A, M, K);
+  err = make_row_major_tensor_map<kBlockM, kBlockK>(&map_a, A, M, K);
   if (err != cudaSuccess) {
     return err;
   }
-  err = make_b_row_major_tensor_map<kBlockN, kBlockK>(&map_b, B, N, K);
+  err = make_b_row_major_tensor_map<kBlockNPerClusterM, kBlockK>(&map_b, B, N,
+                                                                 K);
   if (err != cudaSuccess) {
     return err;
   }
@@ -949,11 +1047,49 @@ inline cudaError_t launch_hgemm_128x128x64_pingpong(
     return err;
   }
 
+  err = cudaFuncSetAttribute(hgemm_pingpong_kernel,
+                             cudaFuncAttributeRequiredClusterWidth,
+                             kClusterM);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaFuncSetAttribute(hgemm_pingpong_kernel,
+                             cudaFuncAttributeRequiredClusterHeight,
+                             kClusterN);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaFuncSetAttribute(hgemm_pingpong_kernel,
+                             cudaFuncAttributeRequiredClusterDepth,
+                             kClusterK);
+  if (err != cudaSuccess) {
+    return err;
+  }
+
   dim3 grid = PersistentTileSchedulerSm90Params::get_grid_shape(
       scheduler, query_sm_count());
-  hgemm_pingpong_kernel<<<grid, kThreads, sizeof(SharedStorage), stream>>>(
-      map_a, map_b, map_c, M, N, K, scheduler);
-  return cudaGetLastError();
+  if (grid.x == 0 || grid.y == 0 || grid.z == 0 ||
+      grid.x % kClusterM != 0 || grid.y % kClusterN != 0 ||
+      grid.z % kClusterK != 0) {
+    return cudaErrorInvalidConfiguration;
+  }
+
+  cudaLaunchAttribute launch_attr[1] = {};
+  launch_attr[0].id = cudaLaunchAttributeClusterDimension;
+  launch_attr[0].val.clusterDim.x = kClusterM;
+  launch_attr[0].val.clusterDim.y = kClusterN;
+  launch_attr[0].val.clusterDim.z = kClusterK;
+
+  cudaLaunchConfig_t config = {};
+  config.gridDim = grid;
+  config.blockDim = dim3(kThreads, 1, 1);
+  config.dynamicSmemBytes = sizeof(SharedStorage);
+  config.stream = stream;
+  config.attrs = launch_attr;
+  config.numAttrs = 1;
+
+  return cudaLaunchKernelEx(&config, hgemm_pingpong_kernel, map_a, map_b,
+                            map_c, M, N, K, scheduler);
 }
 
 } // namespace sm90_hgemm_pingpong
