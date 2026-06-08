@@ -119,20 +119,20 @@ trap cleanup EXIT
 
 if [[ "$dry_run" -eq 1 ]]; then
   echo "Would package files from: $repo_root"
-  tar -C "$repo_root" "${tar_excludes[@]}" -cvf /dev/null . >/dev/null
+  tar -C "$repo_root" "${tar_excludes[@]}" -hcvf /dev/null . >/dev/null
   echo
   echo "Would run:"
-  echo "  ssh -p $port $host mkdir -p $remote_dir_q"
+  echo "  ssh -p $port $host \"if [ -e $remote_dir_q ]; then rm -rf $remote_dir_q; fi; mkdir -p $remote_dir_q\""
   echo "  scp -P $port $archive_name $host:$remote_archive"
   echo "  ssh -p $port $host tar -xzf $remote_archive_q -C $remote_dir_q '&&' rm -f $remote_archive_q"
   exit 0
 fi
 
 echo "Packaging $repo_root -> $archive_path"
-tar -C "$repo_root" "${tar_excludes[@]}" -czf "$archive_path" .
+tar -C "$repo_root" "${tar_excludes[@]}" -hczf "$archive_path" .
 
-echo "Creating remote directory: ${host}:${remote_dir}"
-ssh -p "$port" "$host" "mkdir -p $remote_dir_q"
+echo "Preparing remote directory: ${host}:${remote_dir}"
+ssh -p "$port" "$host" "if [ -e $remote_dir_q ]; then rm -rf $remote_dir_q; fi; mkdir -p $remote_dir_q"
 
 echo "Uploading archive with scp -P $port"
 scp -P "$port" "$archive_path" "${host}:${remote_archive}"

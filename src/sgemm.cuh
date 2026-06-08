@@ -9,3 +9,5 @@
 #include "kernels/cutlass_ref_sgemm_128x128x8stage5.cuh"
 #include "kernels/cutlass_hgemm_tensorop.cuh"
 #include "kernels/cute_hgemm_128x128_nn.cuh"
+#include "kernels/cute_hgemm_128x128_nn_no_reg_prefetch.cuh"
+#include "kernels/sm80_hgemm.cuh"

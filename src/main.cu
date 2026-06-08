@@ -103,6 +103,7 @@ enum class KernelType {
   ExternalDoubleBuffer,
   ExternalNoDoubleBuffer,
   CuteHgemm,
+  CuteHgemmNoRegPrefetch,
   CutlassHgemm,
   CuBlasHgemm,
 };
@@ -139,6 +140,7 @@ void print_usage(const char *program) {
     "  external-db   external 128x128x16 SGEMM with smem double buffering\n"
     "  external-nodb external 128x128x16 SGEMM without smem double buffering\n"
     "  cute-hgemm    cute 128x128x64 HGEMM with tensor cores\n"
+    "  cute-hgemm-noreg cute HGEMM without register prefetch\n"
     "  cutlass-hgemm CUTLASS SM80 TensorOp HGEMM (A100 target)\n"
     "  cublas-hgemm  cuBLAS HGEMM reference\n"
     "\n"
@@ -146,7 +148,7 @@ void print_usage(const char *program) {
     "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
-    "--cute-hgemm, --cutlass-hgemm, --cublas-hgemm\n";
+    "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, --cublas-hgemm\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -203,6 +205,7 @@ bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "external-db")              { *out = KernelType::ExternalDoubleBuffer;  return true; }
   if (value == "external-nodb")            { *out = KernelType::ExternalNoDoubleBuffer; return true; }
   if (value == "cute-hgemm")               { *out = KernelType::CuteHgemm;             return true; }
+  if (value == "cute-hgemm-noreg")         { *out = KernelType::CuteHgemmNoRegPrefetch; return true; }
   if (value == "cutlass-hgemm")            { *out = KernelType::CutlassHgemm;          return true; }
   if (value == "cublas-hgemm")             { *out = KernelType::CuBlasHgemm;           return true; }
   return false;
@@ -237,6 +240,7 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--external-db")              { options->kernels.push_back(KernelType::ExternalDoubleBuffer);  continue; }
     if (arg == "--external-nodb")            { options->kernels.push_back(KernelType::ExternalNoDoubleBuffer); continue; }
     if (arg == "--cute-hgemm")               { options->kernels.push_back(KernelType::CuteHgemm);             continue; }
+    if (arg == "--cute-hgemm-noreg")         { options->kernels.push_back(KernelType::CuteHgemmNoRegPrefetch); continue; }
     if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::CutlassHgemm);          continue; }
     if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::CuBlasHgemm);           continue; }
 
@@ -247,8 +251,8 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "cutlass-stage5-1cta, cutlass-stage5-warporder, "
                      "cutlass-stage5-schedule, cutlass-stage5-copyorder, "
                      "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
-                     "external-db, external-nodb, cute-hgemm, cutlass-hgemm, "
-                     "cublas-hgemm\n";
+                     "external-db, external-nodb, cute-hgemm, "
+                     "cute-hgemm-noreg, cutlass-hgemm, cublas-hgemm\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -614,6 +618,7 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::ExternalDoubleBuffer:   return launch_external_double_buffer;
     case KernelType::ExternalNoDoubleBuffer: return launch_external_no_double_buffer;
     case KernelType::CuteHgemm:
+    case KernelType::CuteHgemmNoRegPrefetch:
     case KernelType::CutlassHgemm:
     case KernelType::CuBlasHgemm:
       return nullptr;
@@ -623,6 +628,7 @@ LaunchFn select_launcher(KernelType type) {
 
 bool is_hgemm_kernel(KernelType type) {
   return type == KernelType::CuteHgemm ||
+         type == KernelType::CuteHgemmNoRegPrefetch ||
          type == KernelType::CutlassHgemm ||
          type == KernelType::CuBlasHgemm;
 }
@@ -640,6 +646,23 @@ bool launch_cute_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
       A, B, C, options.m, options.n, options.k);
   if (err != cudaSuccess) {
     std::cerr << "cute-hgemm launch failed: " << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cute_hgemm_no_reg_prefetch(const Options &options, cute::half_t *A,
+                                       cute::half_t *B, cute::half_t *C) {
+  if (options.m % 128 != 0 || options.n % 128 != 0 || options.k % 64 != 0) {
+    std::cerr << "cute-hgemm-noreg requires M and N to be multiples of 128, "
+                 "and K to be a multiple of 64.\n";
+    return false;
+  }
+  cudaError_t err = cute_hgemm::launch_hgemm_128x128_nn_no_reg_prefetch(
+      A, B, C, options.m, options.n, options.k);
+  if (err != cudaSuccess) {
+    std::cerr << "cute-hgemm-noreg launch failed: "
+              << cudaGetErrorString(err) << '\n';
     return false;
   }
   return CUDA_CHECK(cudaGetLastError());
@@ -692,10 +715,11 @@ bool launch_cublas_hgemm(const Options &options, cute::half_t *A, cute::half_t *
 
 HalfLaunchFn select_half_launcher(KernelType type) {
   switch (type) {
-    case KernelType::CuteHgemm:     return launch_cute_hgemm;
-    case KernelType::CutlassHgemm:  return launch_cutlass_hgemm;
-    case KernelType::CuBlasHgemm:   return launch_cublas_hgemm;
-    default:                        return nullptr;
+    case KernelType::CuteHgemm:              return launch_cute_hgemm;
+    case KernelType::CuteHgemmNoRegPrefetch: return launch_cute_hgemm_no_reg_prefetch;
+    case KernelType::CutlassHgemm:           return launch_cutlass_hgemm;
+    case KernelType::CuBlasHgemm:            return launch_cublas_hgemm;
+    default:                                 return nullptr;
   }
 }
 
@@ -714,6 +738,7 @@ const char *kernel_name(KernelType type) {
     case KernelType::ExternalDoubleBuffer:   return "external_db";
     case KernelType::ExternalNoDoubleBuffer: return "external_nodb";
     case KernelType::CuteHgemm:              return "cute_hgemm";
+    case KernelType::CuteHgemmNoRegPrefetch: return "cute_hgemm_noreg";
     case KernelType::CutlassHgemm:           return "cutlass_hgemm";
     case KernelType::CuBlasHgemm:            return "cublas_hgemm";
   }

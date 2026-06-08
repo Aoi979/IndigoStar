@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cuda_runtime.h>
-
 #include "cutlass/arch/arch.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/epilogue/thread/linear_combination.h"
@@ -11,6 +9,8 @@
 #include "cutlass/half.h"
 #include "cutlass/layout/matrix.h"
 #include "cutlass/numeric_types.h"
+#include <cuda_runtime.h>
+#include <stdio.h>
 
 namespace cutlass_hgemm {
 
@@ -22,30 +22,27 @@ using HgemmSm80TensorOpA100 = cutlass::gemm::device::Gemm<
     Element, Layout, Element, Layout, Element, Layout, Accumulator,
     cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80,
     cutlass::gemm::GemmShape<128, 256, 64>,
-    cutlass::gemm::GemmShape<64, 64, 64>,
-    cutlass::gemm::GemmShape<16, 8, 16>,
+    cutlass::gemm::GemmShape<64, 64, 64>, cutlass::gemm::GemmShape<16, 8, 16>,
     cutlass::epilogue::thread::LinearCombination<Element, 8, Accumulator,
-                                                  Accumulator>,
+                                                 Accumulator>,
     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>, 3>;
 
 using HgemmSm80TensorOpLocal = cutlass::gemm::device::Gemm<
     Element, Layout, Element, Layout, Element, Layout, Accumulator,
     cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80,
     cutlass::gemm::GemmShape<128, 128, 64>,
-    cutlass::gemm::GemmShape<64, 64, 64>,
-    cutlass::gemm::GemmShape<16, 8, 16>,
+    cutlass::gemm::GemmShape<64, 64, 64>, cutlass::gemm::GemmShape<16, 8, 16>,
     cutlass::epilogue::thread::LinearCombination<Element, 8, Accumulator,
-                                                  Accumulator>,
+                                                 Accumulator>,
     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>, 3>;
 
-template <typename GemmOp>
-constexpr int shared_storage_bytes() {
+template <typename GemmOp> constexpr int shared_storage_bytes() {
   return int(sizeof(typename GemmOp::GemmKernel::SharedStorage));
 }
 
 template <typename GemmOp>
-inline cutlass::Status launch_hgemm_with_op(Element *A, Element *B,
-                                            Element *C, int M, int N, int K,
+inline cutlass::Status launch_hgemm_with_op(Element *A, Element *B, Element *C,
+                                            int M, int N, int K,
                                             cudaStream_t stream) {
   GemmOp gemm_op;
 
@@ -71,12 +68,13 @@ inline cutlass::Status launch_hgemm_sm80_tensorop(Element *A, Element *B,
                              cudaDevAttrMaxSharedMemoryPerBlockOptin,
                              device) == cudaSuccess &&
       max_dynamic_smem >= shared_storage_bytes<HgemmSm80TensorOpA100>()) {
+    printf("Launching HgemmSm80TensorOpA100 with %d bytes of shared memory\n",
+           shared_storage_bytes<HgemmSm80TensorOpA100>());
     return launch_hgemm_with_op<HgemmSm80TensorOpA100>(A, B, C, M, N, K,
                                                        stream);
   }
 
-  return launch_hgemm_with_op<HgemmSm80TensorOpLocal>(A, B, C, M, N, K,
-                                                      stream);
+  return launch_hgemm_with_op<HgemmSm80TensorOpLocal>(A, B, C, M, N, K, stream);
 }
 
-}  // namespace cutlass_hgemm
+} // namespace cutlass_hgemm
