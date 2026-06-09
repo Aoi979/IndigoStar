@@ -3,7 +3,6 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cstdint>
-#include <cstddef>
 
 #include "cluster.cuh"
 
@@ -371,9 +370,14 @@ constexpr int kInstM = 64;
 constexpr int kClusterM = 2;
 constexpr int kClusterN = 1;
 constexpr int kClusterK = 1;
-constexpr int kBlockNPerClusterM = kBlockN / kClusterM;
+constexpr int kTmaBAtomN = 64;
+constexpr int kTmaBAtomK = 8;
+constexpr int kTmaBAtomsPerRank = (kBlockK / kTmaBAtomK) / kClusterM;
 constexpr uint64_t kTmaCacheHintEvictLast = 0x14F0000000000000ull;
 static_assert(kBlockN % kClusterM == 0);
+static_assert(kBlockN % kTmaBAtomN == 0);
+static_assert(kBlockK % kTmaBAtomK == 0);
+static_assert((kBlockK / kTmaBAtomK) % kClusterM == 0);
 static_assert(kClusterN == 1);
 
 struct SharedStorage {
@@ -420,23 +424,26 @@ inline cudaError_t make_b_row_major_tensor_map(CUtensorMap *map,
                                                Element const *ptr,
                                                int n,
                                                int k) {
-  static_assert(BlockN >= 64);
-  static_assert(BlockN % 64 == 0);
-  static_assert(BlockK >= 64);
+  static_assert(BlockN >= kTmaBAtomN);
+  static_assert(BlockN % kTmaBAtomN == 0);
+  static_assert(BlockK >= kTmaBAtomK);
+  static_assert(BlockK % kTmaBAtomK == 0);
   if (map == nullptr || ptr == nullptr || n <= 0 || k <= 0 ||
-      n % 64 != 0) {
+      n % kTmaBAtomN != 0) {
     return cudaErrorInvalidValue;
   }
 
-  // Logical tensor is B(n, k) with stride (1, N), backed by row-major B[k][n].
-  // Keep the innermost TMA dimension at 64 half elements so each slice is a
-  // 128B contiguous segment along the physical N-major access direction.
-  uint64_t shape[] = {64, static_cast<uint64_t>(n / 64),
-                      static_cast<uint64_t>(k)};
-  uint64_t stride[] = {64ull * sizeof(Element),
-                       static_cast<uint64_t>(n) * sizeof(Element)};
-  uint32_t box_shape[] = {64u, static_cast<uint32_t>(BlockN / 64),
-                          static_cast<uint32_t>(BlockK)};
+  // Logical tensor is B(n0, k, n64), backed by row-major B[k][n].
+  // This matches CuTe's TMA gbasis for GMMA MN-major SW128:
+  // box (64 N values, 8 K values, 2 N chunks) == one 128x8 B atom.
+  uint64_t shape[] = {static_cast<uint64_t>(kTmaBAtomN),
+                      static_cast<uint64_t>(k),
+                      static_cast<uint64_t>(n / kTmaBAtomN)};
+  uint64_t stride[] = {static_cast<uint64_t>(n) * sizeof(Element),
+                       static_cast<uint64_t>(kTmaBAtomN) * sizeof(Element)};
+  uint32_t box_shape[] = {static_cast<uint32_t>(kTmaBAtomN),
+                          static_cast<uint32_t>(kTmaBAtomK),
+                          static_cast<uint32_t>(BlockN / kTmaBAtomN)};
   uint32_t box_stride[] = {1u, 1u, 1u};
 
   CUresult result = cuTensorMapEncodeTiled(
@@ -453,13 +460,28 @@ __device__ __forceinline__ uint64_t matrix_descriptor_encode(uint64_t x) {
   return (x & 0x3ffff) >> 4;
 }
 
-__device__ __forceinline__ uint64_t make_smem_desc(Element *ptr) {
+__device__ __forceinline__ uint64_t make_smem_desc_k_major(Element *ptr) {
   uint32_t addr = static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
   uint64_t desc = matrix_descriptor_encode(addr);
   desc |= matrix_descriptor_encode(16) << 16;
   desc |= matrix_descriptor_encode(1024) << 32;
   desc |= 1ull << 62;
   return desc;
+}
+
+__device__ __forceinline__ uint64_t make_smem_desc_mn_major_b(Element *ptr) {
+  uint32_t addr = static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
+  uint64_t desc = matrix_descriptor_encode(addr);
+  // GMMA MN-major SW128 layout for a half B tile (N=128, K=64).
+  desc |= matrix_descriptor_encode(1024) << 16;
+  desc |= matrix_descriptor_encode(2048) << 32;
+  desc |= 1ull << 62;
+  return desc;
+}
+
+__device__ __forceinline__ int b_mn_smem_offset(int n_offset, int k_offset) {
+  return (n_offset / kTmaBAtomN) * (kTmaBAtomN * kTmaBAtomK) +
+         (k_offset / kTmaBAtomK) * (kBlockN * kTmaBAtomK);
 }
 
 template <int RegCount>
@@ -491,8 +513,8 @@ template <int ScaleD, int ScaleA, int ScaleB, int TransA, int TransB>
 __device__ __forceinline__ void wgmma_m64n128k16_f16(float d[8][8],
                                                      Element *sA,
                                                      Element *sB) {
-  uint64_t desc_a = make_smem_desc(sA);
-  uint64_t desc_b = make_smem_desc(sB);
+  uint64_t desc_a = make_smem_desc_k_major(sA);
+  uint64_t desc_b = make_smem_desc_mn_major_b(sB);
   asm volatile(
       "{\n"
       "wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16 "
@@ -581,12 +603,12 @@ __device__ __forceinline__ void tma_load(Element *dst,
       : "memory");
 }
 
-__device__ __forceinline__ void tma_load_b_multicast(Element *dst,
-                                                     void const *tensor_map,
-                                                     uint64_t *bar,
-                                                     uint16_t multicast_mask,
-                                                     int global_k,
-                                                     int global_n) {
+__device__ __forceinline__ void tma_load_b_mn_multicast(Element *dst,
+                                                        void const *tensor_map,
+                                                        uint64_t *bar,
+                                                        uint16_t multicast_mask,
+                                                        int global_n,
+                                                        int global_k) {
   uint64_t map_ptr = reinterpret_cast<uint64_t>(tensor_map);
   uint32_t dst_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(dst));
   uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
@@ -594,7 +616,8 @@ __device__ __forceinline__ void tma_load_b_multicast(Element *dst,
       "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster.L2::cache_hint"
       " [%0], [%1, {%4, %5, %6}], [%2], %3, %7;\n" ::"r"(dst_ptr),
       "l"(map_ptr), "r"(bar_ptr), "h"(multicast_mask), "n"(0),
-      "r"(global_n / 64), "r"(global_k), "l"(kTmaCacheHintEvictLast)
+      "r"(global_k), "r"(global_n / kTmaBAtomN),
+      "l"(kTmaCacheHintEvictLast)
       : "memory");
 }
 
@@ -724,8 +747,9 @@ __device__ __forceinline__ void consume_k_tile(SharedStorage &smem,
     for (int mma_k = 0; mma_k < kBlockK; mma_k += 16) {
       Element *sA = &smem.A[stage * kBlockM * kBlockK +
                             mma_m * kInstM * kBlockK + mma_k];
-      Element *sB = &smem.B[stage * kBlockN * kBlockK + mma_k];
-      wgmma_m64n128k16_f16<1, 1, 1, 0, 0>(acc[mma_m], sA, sB);
+      Element *sB =
+          &smem.B[stage * kBlockN * kBlockK + mma_k * kBlockN];
+      wgmma_m64n128k16_f16<1, 1, 1, 0, 1>(acc[mma_m], sA, sB);
     }
   }
 
@@ -851,15 +875,23 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
                      tile.m * kBlockM);
           }
           if (has_valid_b_tile && b_multicast_mask != 0) {
-            // CUTLASS-style B multicast: each M-rank issues one N slice.
-            Element *b_slice =
-                &smem.B[stage * kBlockN * kBlockK +
-                        cluster_m_rank * kBlockNPerClusterM * kBlockK];
-            int b_global_n =
-                tile.n * kBlockN + cluster_m_rank * kBlockNPerClusterM;
-            tma_load_b_multicast(b_slice, &tensor_map_b,
-                                 &full_barriers[stage], b_multicast_mask,
-                                 k_tile * kBlockK, b_global_n);
+            // Each M-rank issues alternating 8-row K atoms. Every atom covers
+            // the full 128-wide N tile in canonical MN-major SW128 order.
+#pragma unroll
+            for (int k_atom_iter = 0; k_atom_iter < kTmaBAtomsPerRank;
+                 ++k_atom_iter) {
+              int const k_atom =
+                  (k_atom_iter * kClusterM +
+                   static_cast<int>(cluster_m_rank)) *
+                  kTmaBAtomK;
+              Element *b_atom =
+                  &smem.B[stage * kBlockN * kBlockK +
+                          b_mn_smem_offset(0, k_atom)];
+              tma_load_b_mn_multicast(
+                  b_atom, &tensor_map_b, &full_barriers[stage],
+                  b_multicast_mask, tile.n * kBlockN,
+                  k_tile * kBlockK + k_atom);
+            }
           }
           if (expected_bytes == 0) {
             arrive_barrier(&full_barriers[stage]);
@@ -1024,8 +1056,7 @@ inline cudaError_t launch_hgemm_128x128x64_pingpong(
   if (err != cudaSuccess) {
     return err;
   }
-  err = make_b_row_major_tensor_map<kBlockNPerClusterM, kBlockK>(&map_b, B, N,
-                                                                 K);
+  err = make_b_row_major_tensor_map<kBlockN, kBlockK>(&map_b, B, N, K);
   if (err != cudaSuccess) {
     return err;
   }
