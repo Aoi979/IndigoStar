@@ -11,3 +11,4 @@
 #include "kernels/cute_hgemm_128x128_nn.cuh"
 #include "kernels/cute_hgemm_128x128_nn_no_reg_prefetch.cuh"
 #include "kernels/sm80_hgemm.cuh"
+#include "kernels/sm90_hgemm_pingpong.cuh"

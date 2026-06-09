@@ -105,6 +105,7 @@ enum class KernelType {
   CuteHgemm,
   CuteHgemmNoRegPrefetch,
   CutlassHgemm,
+  Sm90HgemmPingpong,
   CuBlasHgemm,
 };
 
@@ -142,13 +143,15 @@ void print_usage(const char *program) {
     "  cute-hgemm    cute 128x128x64 HGEMM with tensor cores\n"
     "  cute-hgemm-noreg cute HGEMM without register prefetch\n"
     "  cutlass-hgemm CUTLASS SM80 TensorOp HGEMM (A100 target)\n"
+    "  sm90-hgemm-pingpong SM90 TMA+GMMA persistent pingpong HGEMM\n"
     "  cublas-hgemm  cuBLAS HGEMM reference\n"
     "\n"
     "Legacy flags (also supported):\n"
     "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
-    "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, --cublas-hgemm\n";
+    "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, "
+    "--sm90-hgemm-pingpong, --cublas-hgemm\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -207,6 +210,7 @@ bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "cute-hgemm")               { *out = KernelType::CuteHgemm;             return true; }
   if (value == "cute-hgemm-noreg")         { *out = KernelType::CuteHgemmNoRegPrefetch; return true; }
   if (value == "cutlass-hgemm")            { *out = KernelType::CutlassHgemm;          return true; }
+  if (value == "sm90-hgemm-pingpong")      { *out = KernelType::Sm90HgemmPingpong;     return true; }
   if (value == "cublas-hgemm")             { *out = KernelType::CuBlasHgemm;           return true; }
   return false;
 }
@@ -242,6 +246,7 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--cute-hgemm")               { options->kernels.push_back(KernelType::CuteHgemm);             continue; }
     if (arg == "--cute-hgemm-noreg")         { options->kernels.push_back(KernelType::CuteHgemmNoRegPrefetch); continue; }
     if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::CutlassHgemm);          continue; }
+    if (arg == "--sm90-hgemm-pingpong")      { options->kernels.push_back(KernelType::Sm90HgemmPingpong);     continue; }
     if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::CuBlasHgemm);           continue; }
 
     if (auto value = read_option_value(argc, argv, &i, "--kernel")) {
@@ -252,7 +257,8 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "cutlass-stage5-schedule, cutlass-stage5-copyorder, "
                      "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
                      "external-db, external-nodb, cute-hgemm, "
-                     "cute-hgemm-noreg, cutlass-hgemm, cublas-hgemm\n";
+                     "cute-hgemm-noreg, cutlass-hgemm, "
+                     "sm90-hgemm-pingpong, cublas-hgemm\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -416,20 +422,39 @@ std::vector<cute::half_t> compute_reference_half(
 }
 
 bool verify_half_against_reference(const std::vector<cute::half_t> &host_C,
-                                   const std::vector<cute::half_t> &ref_C) {
+                                   const std::vector<cute::half_t> &ref_C,
+                                   int columns) {
   double max_abs_error = 0.0;
   double max_rel_error = 0.0;
+  std::size_t max_error_index = 0;
+  int printed_large_errors = 0;
   for (std::size_t i = 0; i < host_C.size(); ++i) {
     const double actual   = static_cast<double>(host_C[i]);
     const double expected = static_cast<double>(ref_C[i]);
     const double abs_error = std::abs(actual - expected);
     const double rel_error = abs_error / std::max(1.0, std::abs(expected));
+    if (abs_error > max_abs_error) {
+      max_error_index = i;
+    }
     max_abs_error = std::max(max_abs_error, abs_error);
     max_rel_error = std::max(max_rel_error, rel_error);
+    if (abs_error > 1.0e-2 && printed_large_errors < 8) {
+      std::cout << "verify large_error index=" << i
+                << " row=" << (columns > 0 ? i / columns : 0)
+                << " col=" << (columns > 0 ? i % columns : i)
+                << " actual=" << static_cast<float>(host_C[i])
+                << " expected=" << static_cast<float>(ref_C[i])
+                << " abs=" << abs_error << '\n';
+      ++printed_large_errors;
+    }
   }
   std::cout << "verify max_abs_error=" << max_abs_error
-            << " max_rel_error=" << max_rel_error << '\n';
-  return max_abs_error < 2.0e-1 || max_rel_error < 2.0e-1;
+            << " max_rel_error=" << max_rel_error
+            << " max_index=" << max_error_index
+            << " actual=" << static_cast<float>(host_C[max_error_index])
+            << " expected=" << static_cast<float>(ref_C[max_error_index])
+            << '\n';
+  return max_abs_error < 1.0e-3 && max_rel_error < 1.0e-3;
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +645,7 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::CuteHgemm:
     case KernelType::CuteHgemmNoRegPrefetch:
     case KernelType::CutlassHgemm:
+    case KernelType::Sm90HgemmPingpong:
     case KernelType::CuBlasHgemm:
       return nullptr;
   }
@@ -630,6 +656,7 @@ bool is_hgemm_kernel(KernelType type) {
   return type == KernelType::CuteHgemm ||
          type == KernelType::CuteHgemmNoRegPrefetch ||
          type == KernelType::CutlassHgemm ||
+         type == KernelType::Sm90HgemmPingpong ||
          type == KernelType::CuBlasHgemm;
 }
 
@@ -688,6 +715,50 @@ bool launch_cutlass_hgemm(const Options &options, cute::half_t *A,
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool launch_sm90_hgemm_pingpong(const Options &options, cute::half_t *A,
+                                cute::half_t *B, cute::half_t *C) {
+  static_assert(sizeof(cute::half_t) == sizeof(half));
+  if (options.m % 128 != 0 || options.n % 128 != 0 || options.k % 64 != 0) {
+    std::cerr << "sm90-hgemm-pingpong requires M and N to be multiples of 128, "
+                 "and K to be a multiple of 64.\n";
+    return false;
+  }
+
+  int device = 0;
+  cudaDeviceProp props{};
+  cudaError_t err = cudaGetDevice(&device);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-pingpong cudaGetDevice failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  err = cudaGetDeviceProperties(&props, device);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-pingpong cudaGetDeviceProperties failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  if (props.major < 9) {
+    std::cerr << "sm90-hgemm-pingpong requires an SM90+ GPU. Current device is "
+              << props.major << "." << props.minor << ".\n";
+    return false;
+  }
+
+  auto *half_A = reinterpret_cast<half *>(A);
+  auto *half_B = reinterpret_cast<half *>(B);
+  auto *half_C = reinterpret_cast<half *>(C);
+  err = sm90_hgemm_pingpong::launch_hgemm_128x128x64_pingpong(
+      half_A, half_B, half_C, options.m, options.n, options.k);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-pingpong launch failed: "
+              << cudaGetErrorString(err)
+              << " (build for Hopper with -DCMAKE_CUDA_ARCHITECTURES=90a, "
+                 "or 90 if your toolchain accepts the GMMA/TMA asm there).\n";
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
 bool launch_cublas_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
                          cute::half_t *C) {
   static CuBlasHandle handle;
@@ -718,6 +789,7 @@ HalfLaunchFn select_half_launcher(KernelType type) {
     case KernelType::CuteHgemm:              return launch_cute_hgemm;
     case KernelType::CuteHgemmNoRegPrefetch: return launch_cute_hgemm_no_reg_prefetch;
     case KernelType::CutlassHgemm:           return launch_cutlass_hgemm;
+    case KernelType::Sm90HgemmPingpong:      return launch_sm90_hgemm_pingpong;
     case KernelType::CuBlasHgemm:            return launch_cublas_hgemm;
     default:                                 return nullptr;
   }
@@ -740,6 +812,7 @@ const char *kernel_name(KernelType type) {
     case KernelType::CuteHgemm:              return "cute_hgemm";
     case KernelType::CuteHgemmNoRegPrefetch: return "cute_hgemm_noreg";
     case KernelType::CutlassHgemm:           return "cutlass_hgemm";
+    case KernelType::Sm90HgemmPingpong:      return "sm90_hgemm_pp";
     case KernelType::CuBlasHgemm:            return "cublas_hgemm";
   }
   return "unknown";
@@ -982,7 +1055,7 @@ int main(int argc, char **argv) {
                 << " checksum=" << checksum_half(host_C_h) << '\n';
 
       if (options.verify && cpu_ref_h.has_value()) {
-        if (!verify_half_against_reference(host_C_h, *cpu_ref_h)) {
+        if (!verify_half_against_reference(host_C_h, *cpu_ref_h, options.n)) {
           std::cerr << "Verification FAILED for " << kernel_name(kt) << "\n";
           return 1;
         }

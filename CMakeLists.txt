@@ -40,7 +40,7 @@ add_executable(learn_cuda
     src/main.cu
 )
 
-target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas)
+target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cuda_driver)
 
 target_include_directories(learn_cuda PRIVATE
     ${CMAKE_SOURCE_DIR}/cutlass/include

@@ -122,6 +122,11 @@ external_nodb C[0]=0.01285375 checksum=-1.42908808
 | `cublas` | NVIDIA cuBLAS 参考实现 |
 | `external-db` | 外部 128x128x16 SGEMM，带共享内存双缓冲 |
 | `external-nodb` | 外部 128x128x16 SGEMM，不带共享内存双缓冲 |
+| `cute-hgemm` | CuTe SM80 128x128x64 HGEMM |
+| `cute-hgemm-noreg` | CuTe HGEMM，不做 register prefetch |
+| `cutlass-hgemm` | CUTLASS SM80 TensorOp HGEMM |
+| `sm90-hgemm-pingpong` | SM90 TMA + GMMA persistent pingpong HGEMM，需 Hopper 构建和运行 |
+| `cublas-hgemm` | cuBLAS HGEMM 参考实现 |
 
 ---
 
