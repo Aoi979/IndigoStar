@@ -517,6 +517,8 @@ __device__ __forceinline__ void wgmma_m64n128k16_f16(float d[8][8],
   uint64_t desc_b = make_smem_desc_mn_major_b(sB);
   asm volatile(
       "{\n"
+      ".reg .pred p;\n"
+      "setp.ne.b32 p, %66, 0;\n"
       "wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16 "
       "{%0,   %1,   %2,   %3,   %4,   %5,   %6,   %7,   "
       " %8,   %9,   %10,  %11,  %12,  %13,  %14,  %15,  "
@@ -525,8 +527,10 @@ __device__ __forceinline__ void wgmma_m64n128k16_f16(float d[8][8],
       " %32,  %33,  %34,  %35,  %36,  %37,  %38,  %39,  "
       " %40,  %41,  %42,  %43,  %44,  %45,  %46,  %47,  "
       " %48,  %49,  %50,  %51,  %52,  %53,  %54,  %55,  "
-      " %56,  %57,  %58,  %59,  %60,  %61,  %62,  %63}, "
-      " %64, %65, %66, %67, %68, %69, %70;\n"
+      " %56,  %57,  %58,  %59,  %60,  %61,  %62,  %63},"
+      " %64,"
+      " %65,"
+      " p,    %67,  %68,  %69,  %70;\n"
       "}\n"
       : "+f"(d[0][0]), "+f"(d[0][1]), "+f"(d[0][2]), "+f"(d[0][3]),
         "+f"(d[0][4]), "+f"(d[0][5]), "+f"(d[0][6]), "+f"(d[0][7]),
@@ -544,7 +548,7 @@ __device__ __forceinline__ void wgmma_m64n128k16_f16(float d[8][8],
         "+f"(d[6][4]), "+f"(d[6][5]), "+f"(d[6][6]), "+f"(d[6][7]),
         "+f"(d[7][0]), "+f"(d[7][1]), "+f"(d[7][2]), "+f"(d[7][3]),
         "+f"(d[7][4]), "+f"(d[7][5]), "+f"(d[7][6]), "+f"(d[7][7])
-      : "l"(desc_a), "l"(desc_b), "n"(int32_t(ScaleD)),
+      : "l"(desc_a), "l"(desc_b), "r"(int32_t(ScaleD)),
         "n"(int32_t(ScaleA)), "n"(int32_t(ScaleB)), "n"(int32_t(TransA)),
         "n"(int32_t(TransB)));
 }
@@ -553,7 +557,8 @@ __device__ __forceinline__ void init_barrier(uint64_t *bar,
                                              int arrive_count) {
   uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
   asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\n" ::"r"(bar_ptr),
-               "r"(arrive_count));
+               "r"(arrive_count)
+               : "memory");
 }
 
 __device__ __forceinline__ void wait_barrier(uint64_t *bar, int phase) {
@@ -580,7 +585,8 @@ __device__ __forceinline__ void expect_tma_bytes(uint64_t *bar,
                                                  uint32_t bytes) {
   uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
   asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n"
-               ::"r"(bar_ptr), "r"(bytes));
+               ::"r"(bar_ptr), "r"(bytes)
+               : "memory");
 }
 
 __device__ __forceinline__ void fence_barrier_init() {
@@ -596,7 +602,7 @@ __device__ __forceinline__ void tma_load(Element *dst,
   uint32_t dst_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(dst));
   uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(bar));
   asm volatile(
-      "cp.async.bulk.tensor.3d.shared::cluster.global.tile.mbarrier::complete_tx::bytes"
+      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes"
       " [%0], [%1, {%3, %4, %5}], [%2];\n" ::"r"(dst_ptr),
       "l"(map_ptr), "r"(bar_ptr), "n"(0), "r"(global_row),
       "r"(global_col / 64)
@@ -667,7 +673,7 @@ __device__ __forceinline__ void tma_commit_group() {
 
 template <int PendingGroups>
 __device__ __forceinline__ void tma_wait_group() {
-  asm volatile("cp.async.bulk.wait_group %0;\n" ::"n"(PendingGroups)
+  asm volatile("cp.async.bulk.wait_group.read %0;\n" ::"n"(PendingGroups)
                : "memory");
 }
 
@@ -683,10 +689,9 @@ __device__ __forceinline__ void stmatrix(Element *smem_ptr, Element src[8]) {
   uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
   uint32_t *regs = reinterpret_cast<uint32_t *>(src);
   asm volatile(
-      "stmatrix.sync.aligned.m8n8.x4.trans.shared::cta.b16 [%0], "
+      "stmatrix.sync.aligned.x4.trans.m8n8.shared.b16 [%0], "
       "{%1, %2, %3, %4};\n" ::"r"(smem),
-      "r"(regs[0]), "r"(regs[1]), "r"(regs[2]), "r"(regs[3])
-      : "memory");
+      "r"(regs[0]), "r"(regs[1]), "r"(regs[2]), "r"(regs[3]));
 }
 
 __device__ __forceinline__ void stage_next(int &stage, int &phase) {
