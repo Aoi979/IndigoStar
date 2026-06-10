@@ -689,9 +689,54 @@ __device__ __forceinline__ void stmatrix(Element *smem_ptr, Element src[8]) {
   uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
   uint32_t *regs = reinterpret_cast<uint32_t *>(src);
   asm volatile(
-      "stmatrix.sync.aligned.x4.trans.m8n8.shared.b16 [%0], "
+      "stmatrix.sync.aligned.x4.m8n8.shared.b16 [%0], "
       "{%1, %2, %3, %4};\n" ::"r"(smem),
       "r"(regs[0]), "r"(regs[1]), "r"(regs[2]), "r"(regs[3]));
+}
+
+__device__ __forceinline__ void store_accumulators_tma(
+    SharedStorage &smem, void const *tensor_map_c, GemmTile tile,
+    int warp_group_thread_idx, float acc[2][8][8]) {
+  // CUTLASS SM90_U32x4_STSM_N destination layout for one 64x128 GMMA
+  // accumulator tile.  Each stmatrix.x4 atom writes an 8-column strip; the
+  // second half-warp supplies the right 8 columns of each 16-column group.
+  int const row = (warp_group_thread_idx & 0xf) +
+                  (warp_group_thread_idx >> 5) * 16;
+  int const col_lane = ((warp_group_thread_idx >> 4) & 0x1) * 8;
+  uint32_t const smem_bias =
+      (static_cast<uint32_t>(__cvta_generic_to_shared(smem.C)) & 0x80) >> 7;
+  int const row_swizzle = ((row + static_cast<int>(smem_bias)) & 0x7) << 3;
+
+#pragma unroll
+  for (int mma_m = 0; mma_m < kBlockM / kInstM; ++mma_m) {
+#pragma unroll
+    for (int inst_n = 0; inst_n < kBlockN / 16; ++inst_n) {
+      alignas(16) Element frag[8];
+#pragma unroll
+      for (int i = 0; i < 8; ++i) {
+        // SM90_U32x4_STSM_N consumes the GMMA C fragment in the original
+        // register order. Its SrcLayout maps these eight values across the
+        // destination lane addresses, so a software reorder here would break C.
+        frag[i] = __float2half_rn(acc[mma_m][inst_n][i]);
+      }
+
+      int const col = inst_n * 16 + col_lane;
+      int const col_chunk = col / 64;
+      int const col_in_chunk = col - col_chunk * 64;
+      int const addr = mma_m * kInstM * kBlockN +
+                       col_chunk * kInstM * 64 + row * 64 + col_in_chunk;
+      stmatrix(&smem.C[addr ^ row_swizzle], frag);
+    }
+
+    fence_async_shared();
+    warpgroup_sync();
+    if (warp_group_thread_idx == 0) {
+      tma_store(tensor_map_c, &smem.C[mma_m * kInstM * kBlockN],
+                tile.m * kBlockM + mma_m * kInstM, tile.n * kBlockN);
+      tma_commit_group();
+    }
+  }
+  tma_wait_group<0>();
 }
 
 __device__ __forceinline__ void stage_next(int &stage, int &phase) {
@@ -972,41 +1017,8 @@ __global__ __launch_bounds__(detail::kThreads) void hgemm_pingpong_kernel(
 
     wait_barrier(&epilogue_turn[consumer_idx], turn_phase);
 
-    int warp = warp_group_thread_idx / 32;
-    int lane = warp_group_thread_idx % 32;
-    int base_x1_row = warp * 16;
-    int base_x4_row = base_x1_row + ((lane / 8) % 2) * 8;
-    int base_x4_col = lane % 8 + (lane / 16) * 8;
-    int base_addr = base_x4_row + kInstM * base_x4_col;
-    uint32_t smem_bias =
-        (static_cast<uint32_t>(__cvta_generic_to_shared(smem.C)) & 0x80) >> 7;
-    int lane_swizzle = ((lane + smem_bias) & 0x7) << 3;
-
-#pragma unroll
-    for (int mma_m = 0; mma_m < kBlockM / kInstM; ++mma_m) {
-#pragma unroll
-      for (int inst_n = 0; inst_n < kBlockN / 16; ++inst_n) {
-        Element frag[8];
-#pragma unroll
-        for (int i = 0; i < 8; ++i) {
-          frag[i] = __float2half_rn(acc[mma_m][inst_n][i]);
-        }
-        int mma_row = mma_m * kInstM * kBlockN;
-        int regs_col = inst_n * 16 * kInstM;
-        int addr = (base_addr + mma_row + regs_col) ^ lane_swizzle;
-        stmatrix(&smem.C[addr], frag);
-      }
-
-      fence_async_shared();
-      warpgroup_sync();
-      if (warp_group_thread_idx == 0) {
-        tma_store(&tensor_map_c, &smem.C[mma_m * kInstM * kBlockN],
-                  tile.m * kBlockM + mma_m * kInstM, tile.n * kBlockN);
-        tma_commit_group();
-      }
-    }
-
-    tma_wait_group<0>();
+    store_accumulators_tma(smem, &tensor_map_c, tile, warp_group_thread_idx,
+                           acc);
     if (warp_group_thread_idx == 0) {
       arrive_barrier(&epilogue_turn[1 - consumer_idx]);
     }
