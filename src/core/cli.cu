@@ -20,6 +20,7 @@ void print_usage(const char *program) {
     "  sgemm-external-nodb    external 128x128x16 SGEMM no double-buffer\n"
     "  hgemm-cute             CuTe handwritten 128x128x64 HGEMM\n"
     "  hgemm-cute-noreg       CuTe HGEMM without register prefetch\n"
+    "  hgemm-sm80-handwritten handwritten SM80 mma.sync 128x128x64 HGEMM\n"
     "  hgemm-cutlass-sm80     CUTLASS library SM80 TensorOp HGEMM\n"
     "  hgemm-sm90-pingpong    handwritten SM90 TMA+GMMA pingpong HGEMM\n"
     "  hgemm-sm90-cooperative handwritten SM90 TMA+GMMA cooperative HGEMM\n"
@@ -32,7 +33,7 @@ void print_usage(const char *program) {
     "  --naive, --cublas, --external-db, --external-nodb, --cutlass-stage5, "
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
-    "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, "
+    "--cute-hgemm, --cute-hgemm-noreg, --sm80-hgemm-handwritten, --cutlass-hgemm, "
     "--sm90-hgemm-pingpong, --sm90-hgemm-cooperative, --cutlass-sm90-hgemm-pingpong, "
     "--cutlass-sm90-hgemm-cooperative, --cublas-hgemm\n";
 }
@@ -92,6 +93,8 @@ static bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "sgemm-external-nodb")           { *out = KernelType::SgemmExternalNodb; return true; }
   if (value == "hgemm-cute")                    { *out = KernelType::HgemmCute;             return true; }
   if (value == "hgemm-cute-noreg")              { *out = KernelType::HgemmCuteNoreg; return true; }
+  if (value == "hgemm-sm80" ||
+      value == "hgemm-sm80-handwritten")        { *out = KernelType::HgemmSm80Handwritten; return true; }
   if (value == "hgemm-cutlass-sm80")            { *out = KernelType::HgemmCutlassSm80;          return true; }
   if (value == "hgemm-sm90-pingpong")           { *out = KernelType::HgemmSm90Pingpong;     return true; }
   if (value == "hgemm-sm90-cooperative")        { *out = KernelType::HgemmSm90Cooperative;  return true; }
@@ -134,6 +137,8 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--external-nodb")            { options->kernels.push_back(KernelType::SgemmExternalNodb); continue; }
     if (arg == "--cute-hgemm")               { options->kernels.push_back(KernelType::HgemmCute);             continue; }
     if (arg == "--cute-hgemm-noreg")         { options->kernels.push_back(KernelType::HgemmCuteNoreg); continue; }
+    if (arg == "--sm80-hgemm" ||
+        arg == "--sm80-hgemm-handwritten")   { options->kernels.push_back(KernelType::HgemmSm80Handwritten); continue; }
     if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::HgemmCutlassSm80);          continue; }
     if (arg == "--sm90-hgemm-pingpong")      { options->kernels.push_back(KernelType::HgemmSm90Pingpong);     continue; }
     if (arg == "--sm90-hgemm-cooperative")   { options->kernels.push_back(KernelType::HgemmSm90Cooperative);  continue; }
@@ -150,7 +155,7 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "sgemm-cutlass-like-s5-schedule, sgemm-cutlass-like-s5-copyorder, "
                      "sgemm-cutlass-like-s5-mmaorder, sgemm-cutlass-ref-s5, sgemm-naive, sgemm-cublas, "
                      "sgemm-external-db, sgemm-external-nodb, hgemm-cute, "
-                     "hgemm-cute-noreg, hgemm-cutlass-sm80, "
+                     "hgemm-cute-noreg, hgemm-sm80-handwritten, hgemm-cutlass-sm80, "
                      "hgemm-sm90-pingpong, hgemm-cutlass-sm90-pp, "
                      "hgemm-cutlass-sm90-coop, hgemm-cublas-fp16acc, hgemm-cublas-fp32acc\n";
         return false;
@@ -246,6 +251,7 @@ bool parse_args(int argc, char **argv, Options *options) {
         kt == KernelType::SgemmExternalNodb ||
         kt == KernelType::HgemmCute ||
         kt == KernelType::HgemmCuteNoreg ||
+        kt == KernelType::HgemmSm80Handwritten ||
         kt == KernelType::HgemmCutlassSm80) {
       std::cerr << kernel_name(kt) << " is not available on this architecture "
                    "(built without SM80 kernel support).\n";
@@ -295,6 +301,7 @@ const char *kernel_name(KernelType type) {
     case KernelType::SgemmExternalNodb: return "sgemm_external_nodb";
     case KernelType::HgemmCute:              return "hgemm_cute";
     case KernelType::HgemmCuteNoreg: return "hgemm_cute_noreg";
+    case KernelType::HgemmSm80Handwritten: return "hgemm_sm80_handwritten";
     case KernelType::HgemmCutlassSm80:           return "hgemm_cutlass_sm80";
     case KernelType::HgemmSm90Pingpong:      return "hgemm_sm90_pingpong";
     case KernelType::HgemmSm90Cooperative:   return "hgemm_sm90_cooperative";
@@ -309,6 +316,7 @@ const char *kernel_name(KernelType type) {
 bool is_hgemm_kernel(KernelType type) {
   return type == KernelType::HgemmCute ||
          type == KernelType::HgemmCuteNoreg ||
+         type == KernelType::HgemmSm80Handwritten ||
          type == KernelType::HgemmCutlassSm80 ||
          type == KernelType::HgemmSm90Pingpong ||
          type == KernelType::HgemmSm90Cooperative ||

@@ -24,6 +24,7 @@ enum class KernelType {
   SgemmExternalNodb,
   HgemmCute,
   HgemmCuteNoreg,
+  HgemmSm80Handwritten,
   HgemmCutlassSm80,
   HgemmSm90Pingpong,
   HgemmSm90Cooperative,

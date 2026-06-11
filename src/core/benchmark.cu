@@ -235,6 +235,31 @@ bool launch_cute_hgemm_no_reg_prefetch(const Options &options, cute::half_t *A,
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool launch_sm80_hgemm_handwritten(const Options &options, cute::half_t *A,
+                                   cute::half_t *B, cute::half_t *C) {
+  static_assert(sizeof(cute::half_t) == sizeof(half));
+  constexpr int kMinK = shape_mnk::K * (sm80_hgemm::kStages - 1);
+  if (options.m % shape_mnk::M != 0 || options.n % shape_mnk::N != 0 ||
+      options.k % shape_mnk::K != 0 || options.k < kMinK) {
+    std::cerr << "hgemm-sm80-handwritten requires M and N to be multiples "
+                 "of 128, and K to be a multiple of 64 with K >= "
+              << kMinK << ".\n";
+    return false;
+  }
+
+  auto *half_A = reinterpret_cast<half *>(A);
+  auto *half_B = reinterpret_cast<half *>(B);
+  auto *half_C = reinterpret_cast<half *>(C);
+  cudaError_t err = sm80_hgemm::launch_hgemm_128x128x64(
+      half_A, half_B, half_C, options.m, options.n, options.k);
+  if (err != cudaSuccess) {
+    std::cerr << "hgemm-sm80-handwritten launch failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
 bool launch_cutlass_hgemm(const Options &options, cute::half_t *A,
                           cute::half_t *B, cute::half_t *C) {
   if (options.n % 8 != 0 || options.k % 8 != 0) {
@@ -475,6 +500,7 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::SgemmCuBlas:                 return launch_cublas;
     case KernelType::HgemmCute:
     case KernelType::HgemmCuteNoreg:
+    case KernelType::HgemmSm80Handwritten:
     case KernelType::HgemmCutlassSm80:
     case KernelType::HgemmSm90Pingpong:
     case KernelType::HgemmCutlassSm90Pingpong:
@@ -491,6 +517,7 @@ HalfLaunchFn select_half_launcher(KernelType type) {
 #if ENABLE_SM80_KERNELS
     case KernelType::HgemmCute:              return launch_cute_hgemm;
     case KernelType::HgemmCuteNoreg: return launch_cute_hgemm_no_reg_prefetch;
+    case KernelType::HgemmSm80Handwritten: return launch_sm80_hgemm_handwritten;
     case KernelType::HgemmCutlassSm80:           return launch_cutlass_hgemm;
 #endif
 #if ENABLE_SM90_KERNELS

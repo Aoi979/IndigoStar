@@ -225,16 +225,12 @@ struct shape_mnk {
 template <typename Shape_MNK = shape_mnk, int kStages, int kBlockSwizzle>
 __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
                                        int K) {
-  constexpr int kCtaM = Shape_MNK::M;
-  constexpr int kCtaN = Shape_MNK::N;
-  constexpr int kCtaK = Shape_MNK::K;
+  constexpr int kCtaM = Shape_MNK::M; // 128
+  constexpr int kCtaN = Shape_MNK::N; // 128
+  constexpr int kCtaK = Shape_MNK::K; // 64
 
   constexpr int kWarpsM = 2;
-  constexpr int kWarpsN = 2;
-  constexpr int kWarpsK = 1;
-  constexpr int kWarps = kWarpsM * kWarpsN * kWarpsK;
   constexpr int kWarpSize = 32;
-  constexpr int kThreads = kWarps * kWarpSize;
 
   constexpr int kSmemStrideA = kCtaK;
   constexpr int kSmemStrideB = kCtaN;
@@ -257,6 +253,10 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
 
   int tile_m = blockIdx.x / kBlockSwizzle;
   int tile_n = blockIdx.y * kBlockSwizzle + blockIdx.x % kBlockSwizzle;
+  if (tile_m >= tile_m_max || tile_n >= tile_n_max) {
+    return;
+  }
+
   const half *gA_base = A + tile_m * kCtaM * StrideA;
   const half *gB_base = B + tile_n * kCtaN;
 
@@ -264,10 +264,8 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
 
   int tid = threadIdx.x;
   int warp_id = tid / kWarpSize;
-  int warp_row = warp_id / kWarpsN;
-  int warp_col = warp_id % kWarpsN;
 
-  constexpr int K_TILE_MAX = K / kCtaK;
+  int const K_TILE_MAX = K / kCtaK;
   constexpr int K_BLOCK_MAX = kCtaK / Tiled_MMA_K;
   constexpr int K_PIPE_MAX = kStages;
 
@@ -289,6 +287,20 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
   half tCrC[MMA_M][MMA_N][CoreMatrix_N][CoreMatrix_M][Fragment];
   half tCrA[MMA_M][MMA_K][CoreMatrix_K][CoreMatrix_M][Fragment];
   half tCrB[MMA_N][MMA_K][CoreMatrix_N][CoreMatrix_K][Fragment];
+
+#pragma unroll
+  for (int m = 0; m < MMA_M; ++m) {
+#pragma unroll
+    for (int n = 0; n < MMA_N; ++n) {
+#pragma unroll
+      for (int cm_n = 0; cm_n < CoreMatrix_N; ++cm_n) {
+#pragma unroll
+        for (int cm_m = 0; cm_m < CoreMatrix_M; ++cm_m) {
+          as_u32(tCrC[m][n][cm_n][cm_m][0]) = 0;
+        }
+      }
+    }
+  }
 
   int lane_id = tid % kWarpSize;
 
@@ -452,7 +464,11 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
       if (k_block == K_BLOCK_MAX - 1) {
         stage_A_p = smem->buffer[smem_pipe_read].A;
         stage_B_p = smem->buffer[smem_pipe_read].B;
-        cp_async::wait_group<K_PIPE_MAX - 2>();
+        if (k_tiles_to_compute <= K_PIPE_MAX - 1) {
+          cp_async::wait_group<0>();
+        } else {
+          cp_async::wait_group<K_PIPE_MAX - 2>();
+        }
         __syncthreads();
       }
 
@@ -635,7 +651,7 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
 
   cp_async::wait_all();
   __syncthreads();
-  auto sC = smem->buffer[0].A;
+  half *sC = reinterpret_cast<half *>(shared_memory);
 
   int core_matrix_row = lane_id / 4;
   int core_matrix_col = lane_id % 4;
@@ -644,23 +660,27 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
 #pragma unroll
   for (int m = 0; m < MMA_M; ++m) {
     for (int n = 0; n < MMA_N; ++n) {
-      sC[(m * Tiled_MMA_M + warp_m_id * 16 + 0 * 8 + core_matrix_row) *
-             kSmemStrideC +
-         n * Tiled_MMA_N + warp_n_id * 8 + 0 * 16 + core_matrix_col] =
-          tCrC[m][n][0][0][0];
-      sC[(m * Tiled_MMA_M + warp_m_id * 16 + 1 * 8 + core_matrix_row) *
-             kSmemStrideC +
-         n * Tiled_MMA_N + warp_n_id * 8 + 0 * 16 + core_matrix_col] =
-          tCrC[m][n][0][1][0];
+      *reinterpret_cast<uint32_t *>(
+          &sC[(m * Tiled_MMA_M + warp_m_id * 16 + 0 * 8 + core_matrix_row) *
+                  kSmemStrideC +
+              n * Tiled_MMA_N + warp_n_id * 8 + 0 * 16 +
+              core_matrix_col * 2]) = as_u32(tCrC[m][n][0][0][0]);
+      *reinterpret_cast<uint32_t *>(
+          &sC[(m * Tiled_MMA_M + warp_m_id * 16 + 1 * 8 + core_matrix_row) *
+                  kSmemStrideC +
+              n * Tiled_MMA_N + warp_n_id * 8 + 0 * 16 +
+              core_matrix_col * 2]) = as_u32(tCrC[m][n][0][1][0]);
 
-      sC[(m * Tiled_MMA_M + warp_m_id * 16 + 0 * 8 + core_matrix_row) *
-             kSmemStrideC +
-         n * Tiled_MMA_N + warp_n_id * 8 + 1 * 16 + core_matrix_col] =
-          tCrC[m][n][1][0][0];
-      sC[(m * Tiled_MMA_M + warp_m_id * 16 + 1 * 8 + core_matrix_row) *
-             kSmemStrideC +
-         n * Tiled_MMA_N + warp_n_id * 8 + 1 * 16 + core_matrix_col] =
-          tCrC[m][n][1][1][0];
+      *reinterpret_cast<uint32_t *>(
+          &sC[(m * Tiled_MMA_M + warp_m_id * 16 + 0 * 8 + core_matrix_row) *
+                  kSmemStrideC +
+              n * Tiled_MMA_N + warp_n_id * 8 + 1 * 16 +
+              core_matrix_col * 2]) = as_u32(tCrC[m][n][1][0][0]);
+      *reinterpret_cast<uint32_t *>(
+          &sC[(m * Tiled_MMA_M + warp_m_id * 16 + 1 * 8 + core_matrix_row) *
+                  kSmemStrideC +
+              n * Tiled_MMA_N + warp_n_id * 8 + 1 * 16 +
+              core_matrix_col * 2]) = as_u32(tCrC[m][n][1][1][0]);
     }
   }
 
@@ -677,3 +697,39 @@ __global__ void hgemm_f16f16f16_kernel(half *A, half *B, half *C, int M, int N,
     *d_ptr = *s_ptr;
   }
 }
+
+namespace sm80_hgemm {
+
+constexpr int kStages = 3;
+constexpr int kBlockSwizzle = 8;
+constexpr int kThreads = 128;
+constexpr int kSharedStorageBytes =
+    sizeof(HgemmSharedStorage<shape_mnk, kStages>);
+
+inline cudaError_t launch_hgemm_128x128x64(half *A, half *B, half *C, int M,
+                                           int N, int K,
+                                           cudaStream_t stream = 0) {
+  auto kernel_fptr =
+      hgemm_f16f16f16_kernel<shape_mnk, kStages, kBlockSwizzle>;
+
+  cudaError_t err = cudaFuncSetAttribute(
+      kernel_fptr, cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kSharedStorageBytes);
+  if (err != cudaSuccess) return err;
+
+  err = cudaFuncSetAttribute(kernel_fptr,
+                             cudaFuncAttributePreferredSharedMemoryCarveout,
+                             100);
+  if (err != cudaSuccess) return err;
+
+  int tile_m_count = M / shape_mnk::M;
+  int tile_n_count = N / shape_mnk::N;
+  dim3 block(kThreads);
+  dim3 grid(tile_m_count * kBlockSwizzle,
+            (tile_n_count + kBlockSwizzle - 1) / kBlockSwizzle);
+
+  kernel_fptr<<<grid, block, kSharedStorageBytes, stream>>>(A, B, C, M, N, K);
+  return cudaGetLastError();
+}
+
+} // namespace sm80_hgemm
