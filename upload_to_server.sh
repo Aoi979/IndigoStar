@@ -1,34 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-default_host="user@example.com"
-default_port="22"
-default_remote_dir="/path/to/remote/dir"
+# Read connection defaults from environment so that host/port/remote_dir are not
+# hard-coded in the repository. Set these variables in your shell or in a
+# separate, untracked .env file before running the script.
+default_host="${LEARNCUDA_UPLOAD_HOST:-}"
+default_port="${LEARNCUDA_UPLOAD_PORT:-}"
+default_remote_dir="${LEARNCUDA_UPLOAD_REMOTE_DIR:-}"
 
 usage() {
   cat <<USAGE
 Usage:
   ./upload_to_server.sh [options] [remote_dir]
 
-Defaults:
-  host       ${default_host}
-  port       ${default_port}
-  remote_dir ${default_remote_dir}
+Environment defaults (all optional if provided via options):
+  LEARNCUDA_UPLOAD_HOST        SSH host, e.g. user@example.com
+  LEARNCUDA_UPLOAD_PORT        SSH/scp port, e.g. 22
+  LEARNCUDA_UPLOAD_REMOTE_DIR  Remote directory, e.g. /path/to/remote/dir
 
 Options:
-      --host HOST        SSH host, default: ${default_host}
-  -p, --port PORT        SSH/scp port, default: ${default_port}
+      --host HOST        SSH host, overrides LEARNCUDA_UPLOAD_HOST
+  -p, --port PORT        SSH/scp port, overrides LEARNCUDA_UPLOAD_PORT
   -n, --dry-run          Show commands without uploading.
   -h, --help             Show this help.
 
 Examples:
-  ./upload_to_server.sh
-  ./upload_to_server.sh /path/to/remote/dir
-  ./upload_to_server.sh --dry-run
+  LEARNCUDA_UPLOAD_HOST=user@example.com \
+  LEARNCUDA_UPLOAD_PORT=22 \
+  LEARNCUDA_UPLOAD_REMOTE_DIR=/path/to/remote/dir \
+    ./upload_to_server.sh
+
   ./upload_to_server.sh --host user@example.com --port 22 /path/to/remote/dir
+  ./upload_to_server.sh --dry-run
 
 Equivalent login command:
-  ssh -p ${default_port} ${default_host}
+  ssh -p <port> <host>
 USAGE
 }
 
@@ -79,6 +85,24 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$host" ]]; then
+  echo "Error: host is not set. Use --host or set LEARNCUDA_UPLOAD_HOST." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$port" ]]; then
+  echo "Error: port is not set. Use -p/--port or set LEARNCUDA_UPLOAD_PORT." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$remote_dir" ]]; then
+  echo "Error: remote_dir is not set. Pass it as an argument or set LEARNCUDA_UPLOAD_REMOTE_DIR." >&2
+  usage >&2
+  exit 2
+fi
 
 for tool in tar scp ssh; do
   if ! command -v "$tool" >/dev/null 2>&1; then

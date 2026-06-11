@@ -1,34 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-default_host="user@example.com"
-default_port="22"
-default_remote_dir="/path/to/remote/dir"
+# Read connection defaults and password from environment so that no secrets are
+# hard-coded in the repository. Set these variables in your shell or in a
+# separate, untracked .env file before running the script.
+default_host="${LEARNCUDA_UPLOAD_HOST:-}"
+default_port="${LEARNCUDA_UPLOAD_PORT:-}"
+default_remote_dir="${LEARNCUDA_UPLOAD_REMOTE_DIR:-}"
+upload_password="${LEARNCUDA_UPLOAD_PASSWORD:-}"
 
 usage() {
   cat <<USAGE
 Usage:
-  ./upload_to_server.sh [options] [remote_dir]
+  ./upload_with_pass.sh [options] [remote_dir]
 
-Defaults:
-  host       ${default_host}
-  port       ${default_port}
-  remote_dir ${default_remote_dir}
+Environment defaults (all optional if provided via options):
+  LEARNCUDA_UPLOAD_HOST        SSH host, e.g. user@example.com
+  LEARNCUDA_UPLOAD_PORT        SSH/scp port, e.g. 22
+  LEARNCUDA_UPLOAD_REMOTE_DIR  Remote directory, e.g. /path/to/remote/dir
+  LEARNCUDA_UPLOAD_PASSWORD    SSH password (used via sshpass)
 
 Options:
-      --host HOST        SSH host, default: ${default_host}
-  -p, --port PORT        SSH/scp port, default: ${default_port}
+      --host HOST        SSH host, overrides LEARNCUDA_UPLOAD_HOST
+  -p, --port PORT        SSH/scp port, overrides LEARNCUDA_UPLOAD_PORT
   -n, --dry-run          Show commands without uploading.
   -h, --help             Show this help.
 
 Examples:
-  ./upload_to_server.sh
-  ./upload_to_server.sh /path/to/remote/dir
-  ./upload_to_server.sh --dry-run
-  ./upload_to_server.sh --host user@example.com --port 22 /path/to/remote/dir
+  LEARNCUDA_UPLOAD_HOST=user@example.com \
+  LEARNCUDA_UPLOAD_PORT=22 \
+  LEARNCUDA_UPLOAD_REMOTE_DIR=/path/to/remote/dir \
+  LEARNCUDA_UPLOAD_PASSWORD=yourpassword \
+    ./upload_with_pass.sh
+
+  ./upload_with_pass.sh --host user@example.com --port 22 /path/to/remote/dir
+  ./upload_with_pass.sh --dry-run
 
 Equivalent login command:
-  sshpass -p 'YOUR_PASSWORD' ssh -p ${default_port} ${default_host}
+  sshpass -p <password> ssh -p <port> <host>
 USAGE
 }
 
@@ -80,7 +89,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in tar scp ssh; do
+if [[ -z "$host" ]]; then
+  echo "Error: host is not set. Use --host or set LEARNCUDA_UPLOAD_HOST." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$port" ]]; then
+  echo "Error: port is not set. Use -p/--port or set LEARNCUDA_UPLOAD_PORT." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$remote_dir" ]]; then
+  echo "Error: remote_dir is not set. Pass it as an argument or set LEARNCUDA_UPLOAD_REMOTE_DIR." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$upload_password" ]]; then
+  echo "Error: password is not set. Set LEARNCUDA_UPLOAD_PASSWORD." >&2
+  usage >&2
+  exit 2
+fi
+
+for tool in tar scp ssh sshpass; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "$tool is required but was not found." >&2
     exit 1
@@ -122,9 +155,9 @@ if [[ "$dry_run" -eq 1 ]]; then
   tar -C "$repo_root" "${tar_excludes[@]}" -cvf /dev/null . >/dev/null
   echo
   echo "Would run:"
-  echo "  sshpass -p 'YOUR_PASSWORD' ssh -p $port $host mkdir -p $remote_dir_q"
-  echo "  sshpass -p 'YOUR_PASSWORD' scp -P $port $archive_name $host:$remote_archive"
-  echo "  sshpass -p 'YOUR_PASSWORD' ssh -p $port $host tar -xzf $remote_archive_q -C $remote_dir_q '&&' rm -f $remote_archive_q"
+  echo "  sshpass -p '***' ssh -p $port $host mkdir -p $remote_dir_q"
+  echo "  sshpass -p '***' scp -P $port $archive_name $host:$remote_archive"
+  echo "  sshpass -p '***' ssh -p $port $host tar -xzf $remote_archive_q -C $remote_dir_q '&&' rm -f $remote_archive_q"
   exit 0
 fi
 
@@ -132,15 +165,15 @@ echo "Packaging $repo_root -> $archive_path"
 tar -C "$repo_root" "${tar_excludes[@]}" -czf "$archive_path" .
 
 echo "Creating remote directory: ${host}:${remote_dir}"
-sshpass -p 'YOUR_PASSWORD' ssh -p "$port" "$host" "mkdir -p $remote_dir_q"
+sshpass -p "$upload_password" ssh -p "$port" "$host" "mkdir -p $remote_dir_q"
 
-echo "Uploading archive with sshpass -p 'YOUR_PASSWORD' scp -P $port"
-sshpass -p 'YOUR_PASSWORD' scp -P "$port" "$archive_path" "${host}:${remote_archive}"
+echo "Uploading archive with sshpass"
+sshpass -p "$upload_password" scp -P "$port" "$archive_path" "${host}:${remote_archive}"
 
 echo "Extracting archive on remote"
-sshpass -p 'YOUR_PASSWORD' ssh -p "$port" "$host" "tar -xzf $remote_archive_q -C $remote_dir_q && rm -f $remote_archive_q"
+sshpass -p "$upload_password" ssh -p "$port" "$host" "tar -xzf $remote_archive_q -C $remote_dir_q && rm -f $remote_archive_q"
 
 echo "Done. Login with:"
-echo "  sshpass -p 'YOUR_PASSWORD' ssh -p $port $host"
+echo "  sshpass -p '***' ssh -p $port $host"
 echo "Remote project:"
 echo "  cd $remote_dir"
