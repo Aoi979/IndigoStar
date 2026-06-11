@@ -2,8 +2,15 @@
 set -euo pipefail
 
 # Read connection defaults and password from environment so that no secrets are
-# hard-coded in the repository. Set these variables in your shell or in a
-# separate, untracked .env file before running the script.
+# hard-coded in the repository.
+#
+# You can either export variables in your shell, or place them in a
+# .upload.env file next to this script (the file is gitignored).
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/.upload.env" ]]; then
+  source "$script_dir/.upload.env"
+fi
+
 default_host="${INDIGO_STAR_UPLOAD_HOST:-}"
 default_port="${INDIGO_STAR_UPLOAD_PORT:-}"
 default_remote_dir="${INDIGO_STAR_UPLOAD_REMOTE_DIR:-}"
@@ -155,7 +162,7 @@ if [[ "$dry_run" -eq 1 ]]; then
   tar -C "$repo_root" "${tar_excludes[@]}" -cvf /dev/null . >/dev/null
   echo
   echo "Would run:"
-  echo "  sshpass -p '***' ssh -p $port $host mkdir -p $remote_dir_q"
+  echo "  sshpass -p '***' ssh -p $port $host \"if [ -e $remote_dir_q ]; then rm -rf $remote_dir_q; fi; mkdir -p $remote_dir_q\""
   echo "  sshpass -p '***' scp -P $port $archive_name $host:$remote_archive"
   echo "  sshpass -p '***' ssh -p $port $host tar -xzf $remote_archive_q -C $remote_dir_q '&&' rm -f $remote_archive_q"
   exit 0
@@ -164,8 +171,8 @@ fi
 echo "Packaging $repo_root -> $archive_path"
 tar -C "$repo_root" "${tar_excludes[@]}" -czf "$archive_path" .
 
-echo "Creating remote directory: ${host}:${remote_dir}"
-sshpass -p "$upload_password" ssh -p "$port" "$host" "mkdir -p $remote_dir_q"
+echo "Preparing remote directory: ${host}:${remote_dir}"
+sshpass -p "$upload_password" ssh -p "$port" "$host" "if [ -e $remote_dir_q ]; then rm -rf $remote_dir_q; fi; mkdir -p $remote_dir_q"
 
 echo "Uploading archive with sshpass"
 sshpass -p "$upload_password" scp -P "$port" "$archive_path" "${host}:${remote_archive}"

@@ -69,7 +69,11 @@ __pycache__/
 
 # AI / Agent tooling
 .agents/
+.claude/
 .codex/
+
+# Upload configuration (secrets)
+.upload.env
 
 # ============================================
 # clangd / LSP cache
