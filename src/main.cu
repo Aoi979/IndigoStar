@@ -106,6 +106,8 @@ enum class KernelType {
   CuteHgemmNoRegPrefetch,
   CutlassHgemm,
   Sm90HgemmPingpong,
+  CutlassSm90HgemmPingpong,
+  CutlassSm90HgemmCooperative,
   CuBlasHgemm,
 };
 
@@ -144,6 +146,8 @@ void print_usage(const char *program) {
     "  cute-hgemm-noreg cute HGEMM without register prefetch\n"
     "  cutlass-hgemm CUTLASS SM80 TensorOp HGEMM (A100 target)\n"
     "  sm90-hgemm-pingpong SM90 TMA+GMMA persistent pingpong HGEMM\n"
+    "  cutlass-sm90-hgemm-pingpong CUTLASS SM90 Hopper HGEMM pingpong schedule\n"
+    "  cutlass-sm90-hgemm-cooperative CUTLASS SM90 Hopper HGEMM cooperative schedule\n"
     "  cublas-hgemm  cuBLAS HGEMM reference\n"
     "\n"
     "Legacy flags (also supported):\n"
@@ -151,7 +155,8 @@ void print_usage(const char *program) {
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
     "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, "
-    "--sm90-hgemm-pingpong, --cublas-hgemm\n";
+    "--sm90-hgemm-pingpong, --cutlass-sm90-hgemm-pingpong, "
+    "--cutlass-sm90-hgemm-cooperative, --cublas-hgemm\n";
 }
 
 bool parse_positive_int(std::string_view value, int *out) {
@@ -211,6 +216,10 @@ bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "cute-hgemm-noreg")         { *out = KernelType::CuteHgemmNoRegPrefetch; return true; }
   if (value == "cutlass-hgemm")            { *out = KernelType::CutlassHgemm;          return true; }
   if (value == "sm90-hgemm-pingpong")      { *out = KernelType::Sm90HgemmPingpong;     return true; }
+  if (value == "cutlass-sm90-hgemm-pingpong" ||
+      value == "cutlass-sm90-hgemm-pp")     { *out = KernelType::CutlassSm90HgemmPingpong; return true; }
+  if (value == "cutlass-sm90-hgemm-cooperative" ||
+      value == "cutlass-sm90-hgemm-coop")   { *out = KernelType::CutlassSm90HgemmCooperative; return true; }
   if (value == "cublas-hgemm")             { *out = KernelType::CuBlasHgemm;           return true; }
   return false;
 }
@@ -247,6 +256,8 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--cute-hgemm-noreg")         { options->kernels.push_back(KernelType::CuteHgemmNoRegPrefetch); continue; }
     if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::CutlassHgemm);          continue; }
     if (arg == "--sm90-hgemm-pingpong")      { options->kernels.push_back(KernelType::Sm90HgemmPingpong);     continue; }
+    if (arg == "--cutlass-sm90-hgemm-pingpong") { options->kernels.push_back(KernelType::CutlassSm90HgemmPingpong); continue; }
+    if (arg == "--cutlass-sm90-hgemm-cooperative") { options->kernels.push_back(KernelType::CutlassSm90HgemmCooperative); continue; }
     if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::CuBlasHgemm);           continue; }
 
     if (auto value = read_option_value(argc, argv, &i, "--kernel")) {
@@ -258,7 +269,8 @@ bool parse_args(int argc, char **argv, Options *options) {
                      "cutlass-stage5-mmaorder, cutlass-ref, naive, cublas, "
                      "external-db, external-nodb, cute-hgemm, "
                      "cute-hgemm-noreg, cutlass-hgemm, "
-                     "sm90-hgemm-pingpong, cublas-hgemm\n";
+                     "sm90-hgemm-pingpong, cutlass-sm90-hgemm-pingpong, "
+                     "cutlass-sm90-hgemm-cooperative, cublas-hgemm\n";
         return false;
       }
       options->kernels.push_back(kt);
@@ -646,6 +658,8 @@ LaunchFn select_launcher(KernelType type) {
     case KernelType::CuteHgemmNoRegPrefetch:
     case KernelType::CutlassHgemm:
     case KernelType::Sm90HgemmPingpong:
+    case KernelType::CutlassSm90HgemmPingpong:
+    case KernelType::CutlassSm90HgemmCooperative:
     case KernelType::CuBlasHgemm:
       return nullptr;
   }
@@ -657,6 +671,8 @@ bool is_hgemm_kernel(KernelType type) {
          type == KernelType::CuteHgemmNoRegPrefetch ||
          type == KernelType::CutlassHgemm ||
          type == KernelType::Sm90HgemmPingpong ||
+         type == KernelType::CutlassSm90HgemmPingpong ||
+         type == KernelType::CutlassSm90HgemmCooperative ||
          type == KernelType::CuBlasHgemm;
 }
 
@@ -715,6 +731,29 @@ bool launch_cutlass_hgemm(const Options &options, cute::half_t *A,
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool require_sm90_device(std::string_view name) {
+  int device = 0;
+  cudaDeviceProp props{};
+  cudaError_t err = cudaGetDevice(&device);
+  if (err != cudaSuccess) {
+    std::cerr << name << " cudaGetDevice failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  err = cudaGetDeviceProperties(&props, device);
+  if (err != cudaSuccess) {
+    std::cerr << name << " cudaGetDeviceProperties failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  if (props.major < 9) {
+    std::cerr << name << " requires an SM90+ GPU. Current device is "
+              << props.major << "." << props.minor << ".\n";
+    return false;
+  }
+  return true;
+}
+
 bool launch_sm90_hgemm_pingpong(const Options &options, cute::half_t *A,
                                 cute::half_t *B, cute::half_t *C) {
   static_assert(sizeof(cute::half_t) == sizeof(half));
@@ -759,6 +798,60 @@ bool launch_sm90_hgemm_pingpong(const Options &options, cute::half_t *A,
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool launch_cutlass_sm90_hgemm_pingpong(const Options &options,
+                                        cute::half_t *A, cute::half_t *B,
+                                        cute::half_t *C) {
+  static_assert(sizeof(cute::half_t) == sizeof(cutlass::half_t));
+  if (options.n % 8 != 0 || options.k % 8 != 0) {
+    std::cerr << "cutlass-sm90-hgemm-pingpong requires N and K to be "
+                 "multiples of 8 for 16-byte TMA alignment.\n";
+    return false;
+  }
+  if (!require_sm90_device("cutlass-sm90-hgemm-pingpong")) {
+    return false;
+  }
+
+  auto const *cutlass_A = reinterpret_cast<cutlass::half_t const *>(A);
+  auto const *cutlass_B = reinterpret_cast<cutlass::half_t const *>(B);
+  auto *cutlass_C = reinterpret_cast<cutlass::half_t *>(C);
+  cutlass::Status status = cutlass_sm90_hgemm::launch_hgemm_pingpong(
+      cutlass_A, cutlass_B, cutlass_C, options.m, options.n, options.k);
+  if (status != cutlass::Status::kSuccess) {
+    std::cerr << "cutlass-sm90-hgemm-pingpong failed: "
+              << cutlass::cutlassGetStatusString(status)
+              << " (build for Hopper with -DCMAKE_CUDA_ARCHITECTURES=90a).\n";
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
+bool launch_cutlass_sm90_hgemm_cooperative(const Options &options,
+                                           cute::half_t *A, cute::half_t *B,
+                                           cute::half_t *C) {
+  static_assert(sizeof(cute::half_t) == sizeof(cutlass::half_t));
+  if (options.n % 8 != 0 || options.k % 8 != 0) {
+    std::cerr << "cutlass-sm90-hgemm-cooperative requires N and K to be "
+                 "multiples of 8 for 16-byte TMA alignment.\n";
+    return false;
+  }
+  if (!require_sm90_device("cutlass-sm90-hgemm-cooperative")) {
+    return false;
+  }
+
+  auto const *cutlass_A = reinterpret_cast<cutlass::half_t const *>(A);
+  auto const *cutlass_B = reinterpret_cast<cutlass::half_t const *>(B);
+  auto *cutlass_C = reinterpret_cast<cutlass::half_t *>(C);
+  cutlass::Status status = cutlass_sm90_hgemm::launch_hgemm_cooperative(
+      cutlass_A, cutlass_B, cutlass_C, options.m, options.n, options.k);
+  if (status != cutlass::Status::kSuccess) {
+    std::cerr << "cutlass-sm90-hgemm-cooperative failed: "
+              << cutlass::cutlassGetStatusString(status)
+              << " (build for Hopper with -DCMAKE_CUDA_ARCHITECTURES=90a).\n";
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
 bool launch_cublas_hgemm(const Options &options, cute::half_t *A, cute::half_t *B,
                          cute::half_t *C) {
   static CuBlasHandle handle;
@@ -790,6 +883,8 @@ HalfLaunchFn select_half_launcher(KernelType type) {
     case KernelType::CuteHgemmNoRegPrefetch: return launch_cute_hgemm_no_reg_prefetch;
     case KernelType::CutlassHgemm:           return launch_cutlass_hgemm;
     case KernelType::Sm90HgemmPingpong:      return launch_sm90_hgemm_pingpong;
+    case KernelType::CutlassSm90HgemmPingpong: return launch_cutlass_sm90_hgemm_pingpong;
+    case KernelType::CutlassSm90HgemmCooperative: return launch_cutlass_sm90_hgemm_cooperative;
     case KernelType::CuBlasHgemm:            return launch_cublas_hgemm;
     default:                                 return nullptr;
   }
@@ -813,6 +908,8 @@ const char *kernel_name(KernelType type) {
     case KernelType::CuteHgemmNoRegPrefetch: return "cute_hgemm_noreg";
     case KernelType::CutlassHgemm:           return "cutlass_hgemm";
     case KernelType::Sm90HgemmPingpong:      return "sm90_hgemm_pp";
+    case KernelType::CutlassSm90HgemmPingpong: return "cutlass_sm90_pp";
+    case KernelType::CutlassSm90HgemmCooperative: return "cutlass_sm90_coop";
     case KernelType::CuBlasHgemm:            return "cublas_hgemm";
   }
   return "unknown";

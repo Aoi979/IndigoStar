@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kernels/cutlass_sm90_hgemm.cuh"
 #include "kernels/sgemm_common.cuh"
 #include "kernels/sgemm_naive.cuh"
 #include "kernels/sgemm_128x128x32.cuh"
@@ -12,3 +13,4 @@
 #include "kernels/cute_hgemm_128x128_nn_no_reg_prefetch.cuh"
 #include "kernels/sm80_hgemm.cuh"
 #include "kernels/sm90_hgemm_pingpong.cuh"
+#include "kernels/sm90_hgemm_cooperative.cuh"

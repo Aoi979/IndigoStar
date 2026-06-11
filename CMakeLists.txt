@@ -44,6 +44,7 @@ target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cuda_dr
 
 target_include_directories(learn_cuda PRIVATE
     ${CMAKE_SOURCE_DIR}/cutlass/include
+    ${CMAKE_SOURCE_DIR}/cutlass/tools/util/include
 )
 
 target_compile_features(learn_cuda PRIVATE cxx_std_17 cuda_std_17)

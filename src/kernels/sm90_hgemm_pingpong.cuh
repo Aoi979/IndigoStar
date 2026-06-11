@@ -473,6 +473,7 @@ __device__ __forceinline__ uint64_t make_smem_desc_mn_major_b(Element *ptr) {
   uint32_t addr = static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
   uint64_t desc = matrix_descriptor_encode(addr);
   // GMMA MN-major SW128 layout for a half B tile (N=128, K=64).
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-leading-dimension-byte-offset
   desc |= matrix_descriptor_encode(1024) << 16;
   desc |= matrix_descriptor_encode(2048) << 32;
   desc |= 1ull << 62;
@@ -694,6 +695,14 @@ __device__ __forceinline__ void stmatrix(Element *smem_ptr, Element src[8]) {
       "r"(regs[0]), "r"(regs[1]), "r"(regs[2]), "r"(regs[3]));
 }
 
+__device__ __forceinline__ int swizzle_128b_half_offset(uint32_t base_addr,
+                                                        int half_offset) {
+  uint32_t const byte_addr =
+      base_addr + static_cast<uint32_t>(half_offset) * sizeof(Element);
+  uint32_t const swizzled_byte_addr = byte_addr ^ ((byte_addr & 0x380u) >> 3);
+  return static_cast<int>((swizzled_byte_addr - base_addr) / sizeof(Element));
+}
+
 __device__ __forceinline__ void store_accumulators_tma(
     SharedStorage &smem, void const *tensor_map_c, GemmTile tile,
     int warp_group_thread_idx, float acc[2][8][8]) {
@@ -703,9 +712,8 @@ __device__ __forceinline__ void store_accumulators_tma(
   int const row = (warp_group_thread_idx & 0xf) +
                   (warp_group_thread_idx >> 5) * 16;
   int const col_lane = ((warp_group_thread_idx >> 4) & 0x1) * 8;
-  uint32_t const smem_bias =
-      (static_cast<uint32_t>(__cvta_generic_to_shared(smem.C)) & 0x80) >> 7;
-  int const row_swizzle = ((row + static_cast<int>(smem_bias)) & 0x7) << 3;
+  uint32_t const smem_c_addr =
+      static_cast<uint32_t>(__cvta_generic_to_shared(smem.C));
 
 #pragma unroll
   for (int mma_m = 0; mma_m < kBlockM / kInstM; ++mma_m) {
@@ -725,7 +733,7 @@ __device__ __forceinline__ void store_accumulators_tma(
       int const col_in_chunk = col - col_chunk * 64;
       int const addr = mma_m * kInstM * kBlockN +
                        col_chunk * kInstM * 64 + row * 64 + col_in_chunk;
-      stmatrix(&smem.C[addr ^ row_swizzle], frag);
+      stmatrix(&smem.C[swizzle_128b_half_offset(smem_c_addr, addr)], frag);
     }
 
     fence_async_shared();
