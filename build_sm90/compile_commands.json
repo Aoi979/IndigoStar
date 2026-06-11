@@ -1,0 +1,20 @@
+[
+{
+  "directory": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/build_sm90",
+  "command": "/opt/cuda/bin/nvcc -forward-unknown-to-host-compiler -DENABLE_SM80_KERNELS=0 -DENABLE_SM90_KERNELS=1 --options-file CMakeFiles/learn_cuda.dir/includes_CUDA.rsp -O3 -DNDEBUG -std=c++17 \"--generate-code=arch=compute_90a,code=[compute_90a,sm_90a]\" --expt-relaxed-constexpr --expt-extended-lambda -lineinfo --ptxas-options=-v -x cu -c /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/main.cu -o CMakeFiles/learn_cuda.dir/src/main.cu.o",
+  "file": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/main.cu",
+  "output": "CMakeFiles/learn_cuda.dir/src/main.cu.o"
+},
+{
+  "directory": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/build_sm90",
+  "command": "/opt/cuda/bin/nvcc -forward-unknown-to-host-compiler -DENABLE_SM80_KERNELS=0 -DENABLE_SM90_KERNELS=1 --options-file CMakeFiles/learn_cuda.dir/includes_CUDA.rsp -O3 -DNDEBUG -std=c++17 \"--generate-code=arch=compute_90a,code=[compute_90a,sm_90a]\" --expt-relaxed-constexpr --expt-extended-lambda -lineinfo --ptxas-options=-v -x cu -c /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/core/cli.cu -o CMakeFiles/learn_cuda.dir/src/core/cli.cu.o",
+  "file": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/core/cli.cu",
+  "output": "CMakeFiles/learn_cuda.dir/src/core/cli.cu.o"
+},
+{
+  "directory": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/build_sm90",
+  "command": "/opt/cuda/bin/nvcc -forward-unknown-to-host-compiler -DENABLE_SM80_KERNELS=0 -DENABLE_SM90_KERNELS=1 --options-file CMakeFiles/learn_cuda.dir/includes_CUDA.rsp -O3 -DNDEBUG -std=c++17 \"--generate-code=arch=compute_90a,code=[compute_90a,sm_90a]\" --expt-relaxed-constexpr --expt-extended-lambda -lineinfo --ptxas-options=-v -x cu -c /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/core/benchmark.cu -o CMakeFiles/learn_cuda.dir/src/core/benchmark.cu.o",
+  "file": "/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/core/benchmark.cu",
+  "output": "CMakeFiles/learn_cuda.dir/src/core/benchmark.cu.o"
+}
+]

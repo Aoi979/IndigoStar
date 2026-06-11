@@ -36,15 +36,39 @@ endforeach()
 
 find_package(CUDAToolkit REQUIRED)
 
+# ---------------------------------------------------------------------------
+# Determine which kernel sets to compile based on CUDA architectures
+# ---------------------------------------------------------------------------
+set(ENABLE_SM80_KERNELS 0)
+set(ENABLE_SM90_KERNELS 0)
+foreach(cuda_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    if(cuda_arch MATCHES "^([0-9]+)" AND CMAKE_MATCH_1 GREATER_EQUAL 80 AND CMAKE_MATCH_1 LESS 90)
+        set(ENABLE_SM80_KERNELS 1)
+    endif()
+    if(cuda_arch MATCHES "^([0-9]+)" AND CMAKE_MATCH_1 GREATER_EQUAL 90)
+        set(ENABLE_SM90_KERNELS 1)
+    endif()
+endforeach()
+message(STATUS "ENABLE_SM80_KERNELS=${ENABLE_SM80_KERNELS}")
+message(STATUS "ENABLE_SM90_KERNELS=${ENABLE_SM90_KERNELS}")
+
 add_executable(learn_cuda
     src/main.cu
+    src/core/cli.cu
+    src/core/benchmark.cu
 )
 
 target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cuda_driver)
 
 target_include_directories(learn_cuda PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/cutlass/include
     ${CMAKE_SOURCE_DIR}/cutlass/tools/util/include
+)
+
+target_compile_definitions(learn_cuda PRIVATE
+    ENABLE_SM80_KERNELS=${ENABLE_SM80_KERNELS}
+    ENABLE_SM90_KERNELS=${ENABLE_SM90_KERNELS}
 )
 
 target_compile_features(learn_cuda PRIVATE cxx_std_17 cuda_std_17)

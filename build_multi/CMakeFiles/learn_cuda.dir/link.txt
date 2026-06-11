@@ -1,0 +1,1 @@
+/usr/bin/g++-15 -Wl,--dependency-file=CMakeFiles/learn_cuda.dir/link.d @CMakeFiles/learn_cuda.dir/objects1.rsp -o learn_cuda @CMakeFiles/learn_cuda.dir/linkLibs.rsp -L"/opt/cuda/targets/x86_64-linux/lib/stubs" -L"/opt/cuda/targets/x86_64-linux/lib"
