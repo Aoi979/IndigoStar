@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/build_sm90/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

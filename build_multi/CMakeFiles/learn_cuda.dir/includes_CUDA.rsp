@@ -1,1 +1,0 @@
--I"/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src" -I"/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include" -I"/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/tools/util/include" -isystem "/opt/cuda/targets/x86_64-linux/include" -isystem "/opt/cuda/targets/x86_64-linux/include/cccl"

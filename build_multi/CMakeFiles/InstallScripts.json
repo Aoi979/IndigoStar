@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/build_multi/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

@@ -1,2 +1,113 @@
-/build/
-/.cache/
+# ============================================
+# Build directories
+# ============================================
+# CMake out-of-source builds
+build/
+build_*/
+build.*/
+out/
+cmake-build-*/
+
+# ============================================
+# CMake generated files (in-source build guard)
+# ============================================
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+build.ninja
+.ninja_deps
+.ninja_log
+
+# ============================================
+# C / C++ / CUDA compiled objects
+# ============================================
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.app
+
+# CUDA intermediate files
+*.ptx
+*.fatbin
+*.cubin
+
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+
+# ============================================
+# IDE / Editor
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+
+# AI / Agent tooling
+.agents/
+.codex/
+
+# ============================================
+# clangd / LSP cache
+# ============================================
+.cache/
+.cache/clangd/
+
+# ============================================
+# OS generated files
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================
+# Project-specific generated artifacts
+# ============================================
+
+# Auto-generated after each build via gen_kernel_report.py
+KERNEL_REPORT.md
+
+# CUDA kernel visualization / temporary images
+core/kernel.png
+src/**/kernel.png
+
+# Temporary excalidraw files
+draw/temp.excalidraw
+
+# NVIDIA Nsight Compute new reports (existing tracked reports remain)
+*.ncu-rep
+
+# Local environment-specific symlink to CUTLASS
+cutlass
+
+# New benchmark CSVs (existing tracked files remain)
+bench_csv/*.csv
