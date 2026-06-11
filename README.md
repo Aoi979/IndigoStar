@@ -1,5 +1,7 @@
 # Indigo Star — CUDA GEMM 手写 Kernel 学习与 Benchmark
 
+> 🤖 **AI-Assisted Project**：本项目在开发过程中**大量使用 AI（LLM）辅助**——包括代码生成、性能分析、实验设计、学习笔记撰写以及问题诊断。AI 是本项目的主要协作工具之一。
+
 本项目是一个**从 naive 到 Hopper 的 CUDA GEMM 手写 kernel 集合**，覆盖 FP32（SGEMM）和 FP16（HGEMM）两种精度，支持横向性能对比与正确性验证。
 
 核心目标：
