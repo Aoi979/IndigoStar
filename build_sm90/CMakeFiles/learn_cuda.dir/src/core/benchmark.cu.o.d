@@ -383,6 +383,7 @@ CMakeFiles/learn_cuda.dir/src/core/benchmark.cu.o : /home/aoi211/LearnCUDA/.clau
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/kernels/sm90/hgemm/handwritten/pingpong.cuh \
     /opt/cuda/targets/x86_64-linux/include/cuda.h \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/kernels/sm90/hgemm/handwritten/../../cluster.cuh \
+    /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/kernels/sm90/hgemm/handwritten/cooperative.cuh \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/kernels/sm90/hgemm/cutlass/sm90_hgemm.cuh \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include/cute/tensor.hpp \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include/cute/tensor_impl.hpp \
@@ -1127,5 +1128,4 @@ CMakeFiles/learn_cuda.dir/src/core/benchmark.cu.o : /home/aoi211/LearnCUDA/.clau
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include/cutlass/gemm/device/default_gemm_configuration.h \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include/cutlass/gemm/kernel/gemm_transpose_operands.h \
     /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/include/cutlass/epilogue/threadblock/epilogue_with_visitor_callbacks.h \
-    /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/tools/util/include/cutlass/util/packed_stride.hpp \
-    /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/src/kernels/sm90/hgemm/cutlass/cooperative.cuh
+    /home/aoi211/LearnCUDA/.claude/worktrees/refactor-restructured/cutlass/tools/util/include/cutlass/util/packed_stride.hpp

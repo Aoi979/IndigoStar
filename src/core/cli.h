@@ -26,6 +26,7 @@ enum class KernelType {
   HgemmCuteNoreg,
   HgemmCutlassSm80,
   HgemmSm90Pingpong,
+  HgemmSm90Cooperative,
   HgemmCutlassSm90Pingpong,
   HgemmCutlassSm90Cooperative,
   HgemmCuBlasFp16Acc,

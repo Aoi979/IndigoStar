@@ -22,6 +22,7 @@ void print_usage(const char *program) {
     "  hgemm-cute-noreg       CuTe HGEMM without register prefetch\n"
     "  hgemm-cutlass-sm80     CUTLASS library SM80 TensorOp HGEMM\n"
     "  hgemm-sm90-pingpong    handwritten SM90 TMA+GMMA pingpong HGEMM\n"
+    "  hgemm-sm90-cooperative handwritten SM90 TMA+GMMA cooperative HGEMM\n"
     "  hgemm-cutlass-sm90-pp  CUTLASS library SM90 pingpong schedule\n"
     "  hgemm-cutlass-sm90-coop CUTLASS library SM90 cooperative schedule\n"
     "  hgemm-cublas-fp16acc   cuBLAS HGEMM baseline (fp16 accumulator)\n"
@@ -32,7 +33,7 @@ void print_usage(const char *program) {
     "--cutlass-stage5-1cta, --cutlass-stage5-warporder, --cutlass-stage5-schedule, "
     "--cutlass-stage5-copyorder, --cutlass-stage5-mmaorder, --cutlass-ref, "
     "--cute-hgemm, --cute-hgemm-noreg, --cutlass-hgemm, "
-    "--sm90-hgemm-pingpong, --cutlass-sm90-hgemm-pingpong, "
+    "--sm90-hgemm-pingpong, --sm90-hgemm-cooperative, --cutlass-sm90-hgemm-pingpong, "
     "--cutlass-sm90-hgemm-cooperative, --cublas-hgemm\n";
 }
 
@@ -93,6 +94,7 @@ static bool parse_kernel_type(std::string_view value, KernelType *out) {
   if (value == "hgemm-cute-noreg")              { *out = KernelType::HgemmCuteNoreg; return true; }
   if (value == "hgemm-cutlass-sm80")            { *out = KernelType::HgemmCutlassSm80;          return true; }
   if (value == "hgemm-sm90-pingpong")           { *out = KernelType::HgemmSm90Pingpong;     return true; }
+  if (value == "hgemm-sm90-cooperative")        { *out = KernelType::HgemmSm90Cooperative;  return true; }
   if (value == "hgemm-cutlass-sm90-pp" ||
       value == "hgemm-cutlass-sm90-pingpong")   { *out = KernelType::HgemmCutlassSm90Pingpong; return true; }
   if (value == "hgemm-cutlass-sm90-coop" ||
@@ -134,6 +136,7 @@ bool parse_args(int argc, char **argv, Options *options) {
     if (arg == "--cute-hgemm-noreg")         { options->kernels.push_back(KernelType::HgemmCuteNoreg); continue; }
     if (arg == "--cutlass-hgemm")            { options->kernels.push_back(KernelType::HgemmCutlassSm80);          continue; }
     if (arg == "--sm90-hgemm-pingpong")      { options->kernels.push_back(KernelType::HgemmSm90Pingpong);     continue; }
+    if (arg == "--sm90-hgemm-cooperative")   { options->kernels.push_back(KernelType::HgemmSm90Cooperative);  continue; }
     if (arg == "--cutlass-sm90-hgemm-pingpong") { options->kernels.push_back(KernelType::HgemmCutlassSm90Pingpong); continue; }
     if (arg == "--cutlass-sm90-hgemm-cooperative") { options->kernels.push_back(KernelType::HgemmCutlassSm90Cooperative); continue; }
     if (arg == "--cublas-hgemm")             { options->kernels.push_back(KernelType::HgemmCuBlasFp16Acc);           continue; }
@@ -251,6 +254,7 @@ bool parse_args(int argc, char **argv, Options *options) {
 #endif
 #if !ENABLE_SM90_KERNELS
     if (kt == KernelType::HgemmSm90Pingpong ||
+        kt == KernelType::HgemmSm90Cooperative ||
         kt == KernelType::HgemmCutlassSm90Pingpong ||
         kt == KernelType::HgemmCutlassSm90Cooperative) {
       std::cerr << kernel_name(kt) << " is not available on this architecture "
@@ -293,6 +297,7 @@ const char *kernel_name(KernelType type) {
     case KernelType::HgemmCuteNoreg: return "hgemm_cute_noreg";
     case KernelType::HgemmCutlassSm80:           return "hgemm_cutlass_sm80";
     case KernelType::HgemmSm90Pingpong:      return "hgemm_sm90_pingpong";
+    case KernelType::HgemmSm90Cooperative:   return "hgemm_sm90_cooperative";
     case KernelType::HgemmCutlassSm90Pingpong: return "hgemm_cutlass_sm90_pingpong";
     case KernelType::HgemmCutlassSm90Cooperative: return "hgemm_cutlass_sm90_cooperative";
     case KernelType::HgemmCuBlasFp16Acc:            return "hgemm_cublas_fp16acc";
@@ -306,6 +311,7 @@ bool is_hgemm_kernel(KernelType type) {
          type == KernelType::HgemmCuteNoreg ||
          type == KernelType::HgemmCutlassSm80 ||
          type == KernelType::HgemmSm90Pingpong ||
+         type == KernelType::HgemmSm90Cooperative ||
          type == KernelType::HgemmCutlassSm90Pingpong ||
          type == KernelType::HgemmCutlassSm90Cooperative ||
          type == KernelType::HgemmCuBlasFp16Acc ||

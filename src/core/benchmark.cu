@@ -19,8 +19,8 @@
 
 #if ENABLE_SM90_KERNELS
 #include "kernels/sm90/hgemm/handwritten/pingpong.cuh"
+#include "kernels/sm90/hgemm/handwritten/cooperative.cuh"
 #include "kernels/sm90/hgemm/cutlass/sm90_hgemm.cuh"
-#include "kernels/sm90/hgemm/cutlass/cooperative.cuh"
 #endif
 
 #include <cuda_fp16.h>
@@ -302,6 +302,51 @@ bool launch_sm90_hgemm_pingpong(const Options &options, cute::half_t *A,
   return CUDA_CHECK(cudaGetLastError());
 }
 
+bool launch_sm90_hgemm_cooperative(const Options &options,
+                                   cute::half_t *A, cute::half_t *B,
+                                   cute::half_t *C) {
+  static_assert(sizeof(cute::half_t) == sizeof(half));
+  if (options.m % 128 != 0 || options.n % 128 != 0 || options.k % 64 != 0) {
+    std::cerr << "sm90-hgemm-cooperative requires M and N to be multiples of 128, "
+                 "and K to be a multiple of 64.\n";
+    return false;
+  }
+
+  int device = 0;
+  cudaDeviceProp props{};
+  cudaError_t err = cudaGetDevice(&device);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-cooperative cudaGetDevice failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  err = cudaGetDeviceProperties(&props, device);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-cooperative cudaGetDeviceProperties failed: "
+              << cudaGetErrorString(err) << '\n';
+    return false;
+  }
+  if (props.major < 9) {
+    std::cerr << "sm90-hgemm-cooperative requires an SM90+ GPU. Current device is "
+              << props.major << "." << props.minor << ".\n";
+    return false;
+  }
+
+  auto *half_A = reinterpret_cast<half *>(A);
+  auto *half_B = reinterpret_cast<half *>(B);
+  auto *half_C = reinterpret_cast<half *>(C);
+  err = sm90_hgemm_cooperative::launch_hgemm_128x128x64_cooperative(
+      half_A, half_B, half_C, options.m, options.n, options.k);
+  if (err != cudaSuccess) {
+    std::cerr << "sm90-hgemm-cooperative launch failed: "
+              << cudaGetErrorString(err)
+              << " (build for Hopper with -DCMAKE_CUDA_ARCHITECTURES=90a, "
+                 "or 90 if your toolchain accepts the GMMA/TMA asm there).\n";
+    return false;
+  }
+  return CUDA_CHECK(cudaGetLastError());
+}
+
 bool launch_cutlass_sm90_hgemm_pingpong(const Options &options,
                                         cute::half_t *A, cute::half_t *B,
                                         cute::half_t *C) {
@@ -450,6 +495,7 @@ HalfLaunchFn select_half_launcher(KernelType type) {
 #endif
 #if ENABLE_SM90_KERNELS
     case KernelType::HgemmSm90Pingpong:      return launch_sm90_hgemm_pingpong;
+    case KernelType::HgemmSm90Cooperative:   return launch_sm90_hgemm_cooperative;
     case KernelType::HgemmCutlassSm90Pingpong: return launch_cutlass_sm90_hgemm_pingpong;
     case KernelType::HgemmCutlassSm90Cooperative: return launch_cutlass_sm90_hgemm_cooperative;
 #endif

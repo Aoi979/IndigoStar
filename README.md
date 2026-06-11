@@ -11,44 +11,30 @@
 
 ## 快速开始
 
-```bash
-cd build
-cmake .. -DCMAKE_CUDA_ARCHITECTURES=80
-cmake --build .
-```
-
-> 若目标 GPU 为 Hopper（SM90），请将架构改为 `90a`：
-> ```bash
-cmake .. -DCMAKE_CUDA_ARCHITECTURES=90a
-```
-
-CMake 会根据 `CMAKE_CUDA_ARCHITECTURES` **自动裁剪编译的 kernel 集合**：
-- SM80 / SM89：只编译 SM80 目录下的算子
-- SM90 / SM90a：只编译 SM90 目录下的算子
-- 同时指定 `80,90a`：两者都编译
-
-### 横向 Benchmark
-
-指定要测的算子，程序**自动加入对应的 cuBLAS 基线**：
+推荐使用封装脚本，无需手动操作 cmake：
 
 ```bash
-# 只传手写算子，自动补上 cublas
-./learn_cuda bench --kernel sgemm-custom --kernel sgemm-naive --size 1024
+# 一键编译（自动检测 GPU 架构）
+./scripts/build.sh
 
-# 同时测 SGEMM 和 HGEMM，自动补上 cublas + cublas-hgemm
-./learn_cuda bench --kernel sgemm-custom --kernel hgemm-cute --size 1024
+# 一键跑全量 benchmark（自动根据架构选择可用 kernel）
+./scripts/bench.sh
 
-# 显式传了 cublas 则不再重复添加
-./learn_cuda bench --kernel sgemm-custom --kernel sgemm-cublas --size 1024
+# 一键跑全量精度验证
+./scripts/verify.sh
 ```
 
-### 正确性验证
+| 脚本 | 功能 | 示例 |
+|------|------|------|
+| `scripts/build.sh` | 自动检测 GPU 架构并编译 | `./scripts/build.sh` |
+| `scripts/bench.sh` | 自动检测架构，跑全量 benchmark | `./scripts/bench.sh 2048 200 20` |
+| `scripts/verify.sh` | 自动检测架构，跑全量精度验证 | `./scripts/verify.sh 1024` |
 
-```bash
-./learn_cuda --kernel sgemm-custom --size 256 --verify
-```
+> **机器适配**：
+> - **4060 (SM89)** / **A100 (SM80)**：编译并跑全部 SM80 SGEMM + HGEMM
+> - **H100 (SM90)**：只编译并跑 SM90 HGEMM（TMA/GMMA）
 
-更多用法详见 [USAGE.md](USAGE.md)。
+如需手动 cmake，详见 [USAGE.md](USAGE.md)。
 
 ---
 

@@ -2,7 +2,75 @@
 
 CUDA GEMM 手写 kernel 学习与 benchmark 项目，支持 SGEMM（FP32）和 HGEMM（FP16）两种精度，覆盖从 naive 到 Hopper 的多级优化实现。
 
-## 构建
+---
+
+## 一键脚本（推荐）
+
+项目提供三个自动检测 GPU 架构的封装脚本，无需手动 cmake：
+
+### `scripts/build.sh` — 自动编译
+
+自动检测当前 GPU 的 compute capability，清理旧 build，配置 cmake 并编译：
+
+```bash
+./scripts/build.sh
+```
+
+输出示例：
+```
+Detected GPU compute capability: 89
+Machine:    RTX 4060 (Ada, SM89)
+CMake arch: 89
+...
+Build complete: .../build/learn_cuda
+```
+
+| 机器 | 检测值 | CMake 架构 | 编译范围 |
+|------|--------|-----------|---------|
+| RTX 4060 | `89` | `89` | SM80 算子（Ada 兼容 Ampere） |
+| A100 | `80` | `80` | SM80 算子 |
+| H100 | `90` | `90a` | SM90 算子 |
+
+### `scripts/bench.sh` — 全量 Benchmark
+
+自动检测架构，运行当前机器上**全部可用 kernel** 的 benchmark，并自动加入 cuBLAS 基线：
+
+```bash
+# 默认参数: size=1024, iters=100, warmup=10
+./scripts/bench.sh
+
+# 自定义参数: size=2048, iters=200, warmup=20
+./scripts/bench.sh 2048 200 20
+```
+
+**4060 / A100 跑的 kernel：**
+- SGEMM: `sgemm-custom`, `sgemm-naive`, `sgemm-external-db`, `sgemm-external-nodb`, `sgemm-cutlass-like-s5`（及变体）, `sgemm-cutlass-ref-s5`
+- HGEMM: `hgemm-cute`, `hgemm-cute-noreg`, `hgemm-cutlass-sm80`
+- 基线: 自动加 `sgemm-cublas` + `hgemm-cublas-fp16acc`，显式加 `hgemm-cublas-fp32acc`
+
+**H100 跑的 kernel：**
+- HGEMM: `hgemm-sm90-pingpong`, `hgemm-cutlass-sm90-pp`, `hgemm-cutlass-sm90-coop`
+- 基线: 自动加 `hgemm-cublas-fp16acc`，显式加 `hgemm-cublas-fp32acc`
+
+### `scripts/verify.sh` — 全量精度验证
+
+自动检测架构，运行当前机器上全部可用 kernel 的**正确性验证**（和 CPU 双精度参考结果对比）：
+
+```bash
+# 默认 size=512
+./scripts/verify.sh
+
+# 自定义尺寸
+./scripts/verify.sh 1024
+```
+
+> 验证通过的 kernel 会输出 `verify max_abs_error=... max_rel_error=...`；若失败则报错退出。
+
+---
+
+## 手动构建
+
+如需手动 cmake：
 
 ```bash
 cd build
