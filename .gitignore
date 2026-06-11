@@ -106,8 +106,5 @@ draw/temp.excalidraw
 # NVIDIA Nsight Compute new reports (existing tracked reports remain)
 *.ncu-rep
 
-# Local environment-specific symlink to CUTLASS
-cutlass
-
 # New benchmark CSVs (existing tracked files remain)
 bench_csv/*.csv
