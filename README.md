@@ -1,8 +1,12 @@
 # Indigo Star — CUDA GEMM 手写 Kernel 学习与 Benchmark
 
 > 🤖 **AI-Assisted Project**：本项目在开发过程中**大量使用 AI（LLM）辅助**——包括代码生成、性能分析、实验设计、学习笔记撰写以及问题诊断。AI 是本项目的主要协作工具之一。
+>
+> 特别说明：**本 README 及项目中的绝大部分文档、脚本、构建配置、benchmark 框架等均由 AI 生成或深度辅助完成**。手写核心仅限于 `src/kernels/` 下的 CUDA GEMM kernel 实现本身，其余基础设施几乎全部由 AI 协作产出。
 
 本项目是一个**从 naive 到 Hopper 的 CUDA GEMM 手写 kernel 集合**，覆盖 FP32（SGEMM）和 FP16（HGEMM）两种精度，支持横向性能对比与正确性验证。
+
+> ⚠️ **实验性质**：仓库中可能留存历史实验代码、废弃实现或临时文件，部分内容可能**长期不更新或已过时**。请以当前主干和最新笔记为准。
 
 核心目标：
 - **学习**：理解 CUTLASS、CuTe、TMA/GMMA 等底层优化技术
@@ -46,8 +50,14 @@
 ├── CMakeLists.txt
 ├── README.md
 ├── USAGE.md
+├── upload_to_server.sh                 # SSH 密钥方式上传项目到远程服务器
+├── upload_with_pass.sh                 # 密码方式上传项目到远程服务器
+├── .upload.env.example                 # 上传配置模板（复制为 .upload.env 使用）
 ├── scripts/
-│   └── gen_kernel_report.py          # 编译后自动生成 kernel 资源报告
+│   ├── bench.sh                        # 一键跑全量 benchmark
+│   ├── build.sh                        # 一键编译（自动检测 GPU 架构）
+│   ├── gen_kernel_report.py            # 编译后自动生成 kernel 资源报告
+│   └── verify.sh                       # 一键跑全量精度验证
 ├── cutlass/                            # CUTLASS submodule
 ├── note/                               # 学习笔记（与代码演进一一对应）
 ├── src/
@@ -85,10 +95,10 @@
 │           └── hgemm/                  #   FP16 HGEMM (TMA + GMMA)
 │               ├── handwritten/        #     手写算子
 │               │   ├── pingpong.cuh
+│               │   ├── cooperative.cuh
 │               │   └── bf16_ref.cuh
 │               └── cutlass/            #     直接调 CUTLASS 库
-│                   ├── sm90_hgemm.cuh
-│                   └── cooperative.cuh
+│                   └── sm90_hgemm.cuh
 ```
 
 ---
