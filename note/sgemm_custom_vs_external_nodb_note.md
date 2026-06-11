@@ -37,13 +37,13 @@ __syncthreads();
 
 位置：
 
-- [sgemm_128x128x32.cuh](/home/aoi211/LearnCUDA/src/kernels/sgemm_128x128x32.cuh:199)
-- [sgemm_128x128x32_trial.cuh](/home/aoi211/LearnCUDA/src/kernels/sgemm_128x128x32_trial.cuh:207)
+- [sgemm_128x128x32.cuh](/home/aoi211/IndigoStar/src/kernels/sgemm_128x128x32.cuh:199)
+- [sgemm_128x128x32_trial.cuh](/home/aoi211/IndigoStar/src/kernels/sgemm_128x128x32_trial.cuh:207)
 
 修正后验证：
 
 ```bash
-./build/learn_cuda --kernel custom --kernel external-nodb --kernel trial \
+./build/indigo_star --kernel custom --kernel external-nodb --kernel trial \
   --verify --size 128 --iters 1 --warmup 1
 ```
 
@@ -56,10 +56,10 @@ __syncthreads();
 命令：
 
 ```bash
-./build/learn_cuda bench --kernel custom --kernel external-nodb \
+./build/indigo_star bench --kernel custom --kernel external-nodb \
   --size 4096 --warmup 20 --iters 100
 
-./build/learn_cuda bench --kernel external-nodb --kernel custom \
+./build/indigo_star bench --kernel external-nodb --kernel custom \
   --size 4096 --warmup 20 --iters 100
 ```
 
@@ -91,7 +91,7 @@ __syncthreads();
   --section WarpStateStats \
   --print-details all \
   -c 1 \
-  ./build/learn_cuda --kernel custom --size 4096
+  ./build/indigo_star --kernel custom --size 4096
 
 /usr/local/NVIDIA-Nsight-Compute-2025.3/ncu \
   --section LaunchStats \
@@ -101,7 +101,7 @@ __syncthreads();
   --section WarpStateStats \
   --print-details all \
   -c 1 \
-  ./build/learn_cuda --kernel external-nodb --size 4096
+  ./build/indigo_star --kernel external-nodb --size 4096
 ```
 
 注意：ncu 也要串行跑，不能两个 profile 同时打到同一张 GPU 上。

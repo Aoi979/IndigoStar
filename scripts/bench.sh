@@ -13,10 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LEARN_CUDA="$PROJECT_DIR/build/learn_cuda"
+INDIGO_STAR="$PROJECT_DIR/build/indigo_star"
 
-if [ ! -f "$LEARN_CUDA" ]; then
-    echo "Error: $LEARN_CUDA not found. Run ./scripts/build.sh first." >&2
+if [ ! -f "$INDIGO_STAR" ]; then
+    echo "Error: $INDIGO_STAR not found. Run ./scripts/build.sh first." >&2
     exit 1
 fi
 
@@ -52,7 +52,7 @@ case "$cap" in
         # Explicit fp32acc baseline for comparison
         echo "Running all SM80 kernels (SGEMM + HGEMM) ..."
         echo ""
-        "$LEARN_CUDA" bench \
+        "$INDIGO_STAR" bench \
             --kernel sgemm-custom \
             --kernel sgemm-naive \
             --kernel sgemm-external-db \
@@ -77,7 +77,7 @@ case "$cap" in
         # Explicit fp32acc baseline for comparison
         echo "Running all SM90 kernels (HGEMM) ..."
         echo ""
-        "$LEARN_CUDA" bench \
+        "$INDIGO_STAR" bench \
             --kernel hgemm-sm90-pingpong \
             --kernel hgemm-cutlass-sm90-pp \
             --kernel hgemm-cutlass-sm90-coop \

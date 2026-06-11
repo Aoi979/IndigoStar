@@ -35,9 +35,9 @@
 参考命令：
 
 ```bash
-./build/learn_cuda bench --kernel custom --kernel trial --size 1024 --warmup 20 --iters 200
-./build/learn_cuda bench --kernel custom --kernel trial --size 2048 --warmup 20 --iters 100
-./build/learn_cuda bench --kernel custom --kernel trial --size 4096 --warmup 10 --iters 50
+./build/indigo_star bench --kernel custom --kernel trial --size 1024 --warmup 20 --iters 200
+./build/indigo_star bench --kernel custom --kernel trial --size 2048 --warmup 20 --iters 100
+./build/indigo_star bench --kernel custom --kernel trial --size 4096 --warmup 10 --iters 50
 ```
 
 注意：不要并行跑两个 bench 进程，否则两个进程会抢同一块 GPU，计时会被污染。
@@ -59,7 +59,7 @@
   --section SpeedOfLight \
   --section SchedulerStats \
   -c 1 \
-  ./build/learn_cuda --kernel custom --size 2048
+  ./build/indigo_star --kernel custom --size 2048
 
 /usr/local/NVIDIA-Nsight-Compute-2025.3/ncu \
   --section LaunchStats \
@@ -67,7 +67,7 @@
   --section SpeedOfLight \
   --section SchedulerStats \
   -c 1 \
-  ./build/learn_cuda --kernel trial --size 2048
+  ./build/indigo_star --kernel trial --size 2048
 ```
 
 ### `--custom`

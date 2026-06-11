@@ -4,7 +4,7 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 80 CACHE STRING "CUDA GPU architectures")
 endif()
 
-project(learn_cuda LANGUAGES CXX CUDA)
+project(indigo_star LANGUAGES CXX CUDA)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -52,33 +52,33 @@ endforeach()
 message(STATUS "ENABLE_SM80_KERNELS=${ENABLE_SM80_KERNELS}")
 message(STATUS "ENABLE_SM90_KERNELS=${ENABLE_SM90_KERNELS}")
 
-add_executable(learn_cuda
+add_executable(indigo_star
     src/main.cu
     src/core/cli.cu
     src/core/benchmark.cu
 )
 
-target_link_libraries(learn_cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cuda_driver)
+target_link_libraries(indigo_star PRIVATE CUDA::cudart CUDA::cublas CUDA::cuda_driver)
 
-target_include_directories(learn_cuda PRIVATE
+target_include_directories(indigo_star PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/cutlass/include
     ${CMAKE_SOURCE_DIR}/cutlass/tools/util/include
 )
 
-target_compile_definitions(learn_cuda PRIVATE
+target_compile_definitions(indigo_star PRIVATE
     ENABLE_SM80_KERNELS=${ENABLE_SM80_KERNELS}
     ENABLE_SM90_KERNELS=${ENABLE_SM90_KERNELS}
 )
 
-target_compile_features(learn_cuda PRIVATE cxx_std_17 cuda_std_17)
+target_compile_features(indigo_star PRIVATE cxx_std_17 cuda_std_17)
 
-target_compile_options(learn_cuda PRIVATE
+target_compile_options(indigo_star PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr;--expt-extended-lambda;-lineinfo;--ptxas-options=-v>
 )
 
-set_target_properties(learn_cuda PROPERTIES
+set_target_properties(indigo_star PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     CUDA_RUNTIME_LIBRARY Shared
 )
@@ -88,11 +88,11 @@ set_target_properties(learn_cuda PROPERTIES
 # ---------------------------------------------------------------------------
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-add_custom_command(TARGET learn_cuda POST_BUILD
+add_custom_command(TARGET indigo_star POST_BUILD
     COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_SOURCE_DIR}/scripts/gen_kernel_report.py
         --build-dir ${CMAKE_BINARY_DIR}
-        --target learn_cuda
+        --target indigo_star
         --output ${CMAKE_SOURCE_DIR}/KERNEL_REPORT.md
     COMMENT "Generating CUDA kernel resource report (KERNEL_REPORT.md)..."
     VERBATIM

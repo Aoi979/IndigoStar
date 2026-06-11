@@ -1,4 +1,4 @@
-# LearnCUDA — CUDA GEMM 手写 Kernel 学习与 Benchmark
+# Indigo Star — CUDA GEMM 手写 Kernel 学习与 Benchmark
 
 本项目是一个**从 naive 到 Hopper 的 CUDA GEMM 手写 kernel 集合**，覆盖 FP32（SGEMM）和 FP16（HGEMM）两种精度，支持横向性能对比与正确性验证。
 

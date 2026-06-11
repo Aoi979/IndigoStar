@@ -19,15 +19,15 @@ threads_per_block = 256
 工程里新增了两个命令行入口：
 
 ```bash
-./build/learn_cuda --external-db
-./build/learn_cuda --external-nodb
+./build/indigo_star --external-db
+./build/indigo_star --external-nodb
 ```
 
 也可以用：
 
 ```bash
-./build/learn_cuda --kernel external-db
-./build/learn_cuda --kernel external-nodb
+./build/indigo_star --kernel external-db
+./build/indigo_star --kernel external-nodb
 ```
 
 ## 实验问题
@@ -109,7 +109,7 @@ external_nodb   20.1908 ms
   --section InstructionStats \
   --print-details all \
   -c 1 \
-  ./build/learn_cuda --kernel external-db --size 2048
+  ./build/indigo_star --kernel external-db --size 2048
 
 /usr/local/NVIDIA-Nsight-Compute-2025.3/ncu \
   --section LaunchStats \
@@ -122,7 +122,7 @@ external_nodb   20.1908 ms
   --section InstructionStats \
   --print-details all \
   -c 1 \
-  ./build/learn_cuda --kernel external-nodb --size 2048
+  ./build/indigo_star --kernel external-nodb --size 2048
 ```
 
 ### size 2048
@@ -205,7 +205,7 @@ Dispatch Stall:  0.53 -> 0.46
 
 - 双缓冲版在主循环开头先把下一块 tile load 到 register:
 
-  [sgemm_external_128x128x16.cuh](/home/aoi211/LearnCUDA/src/kernels/sgemm_external_128x128x16.cuh:86)
+  [sgemm_external_128x128x16.cuh](/home/aoi211/IndigoStar/src/kernels/sgemm_external_128x128x16.cuh:86)
 
   ```cpp
   for (int k = 1; k < k_iter; ++k) {
@@ -220,7 +220,7 @@ Dispatch Stall:  0.53 -> 0.46
 
 - 单缓冲版每个 K tile 都是 load 到 smem，sync，然后 compute:
 
-  [sgemm_external_128x128x16.cuh](/home/aoi211/LearnCUDA/src/kernels/sgemm_external_128x128x16.cuh:291)
+  [sgemm_external_128x128x16.cuh](/home/aoi211/IndigoStar/src/kernels/sgemm_external_128x128x16.cuh:291)
 
   ```cpp
   for (int k = 0; k < k_iter; ++k) {

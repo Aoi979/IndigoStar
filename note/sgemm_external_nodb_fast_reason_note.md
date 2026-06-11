@@ -5,7 +5,7 @@
 这次问题来自一个反直觉现象：
 
 ```text
-./learn_cuda bench --size 4096 \
+./indigo_star bench --size 4096 \
   --kernel cublas \
   --kernel custom \
   --kernel external-db \
@@ -44,7 +44,7 @@ constexpr int ASmemStride = kBM + ASmemPad;  // 132
 | `external-db` | 118 | 32768 B |
 | `external-nodb` | 128 | 16384 B |
 
-注意：本仓库当前只有 `./build/learn_cuda`，没有根目录 `./learn_cuda`。如果机器上跑的是另一个 `./learn_cuda`，需要确认它是不是旧二进制。
+注意：本仓库当前只有 `./build/indigo_star`，没有根目录 `./indigo_star`。如果机器上跑的是另一个 `./indigo_star`，需要确认它是不是旧二进制。
 
 ## 先说结论
 
@@ -108,7 +108,7 @@ Warp stall：
 当前本地串行跑：
 
 ```bash
-./build/learn_cuda bench --size 4096 \
+./build/indigo_star bench --size 4096 \
   --kernel cublas \
   --kernel custom \
   --kernel external-db \
@@ -128,7 +128,7 @@ Warp stall：
 反向顺序：
 
 ```bash
-./build/learn_cuda bench --size 4096 \
+./build/indigo_star bench --size 4096 \
   --kernel external-nodb \
   --kernel external-db \
   --kernel custom \

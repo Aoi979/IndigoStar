@@ -45,7 +45,7 @@ gemm(mma, tCrA(_, _, k_block), tCrB(_, _, k_block), tCrC);
 小尺寸验证：
 
 ```bash
-./build/learn_cuda \
+./build/indigo_star \
   --kernel cute-hgemm \
   --kernel cute-hgemm-noreg \
   --m 256 --n 256 --k 256 \
@@ -74,7 +74,7 @@ ptxas / `KERNEL_REPORT.md` 资源：
 普通 CUDA event benchmark：
 
 ```bash
-./build/learn_cuda bench \
+./build/indigo_star bench \
   --kernel cute-hgemm \
   --kernel cute-hgemm-noreg \
   --m 4096 --n 4096 --k 4096 \
@@ -115,7 +115,7 @@ ptxas / `KERNEL_REPORT.md` 资源：
   --launch-count 1 \
   --metrics gpu__time_duration.sum,launch__registers_per_thread,smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_short_scoreboard_per_warp_active.ratio,smsp__warp_issue_stalled_wait_per_warp_active.pct,smsp__warp_issue_stalled_wait_per_warp_active.ratio,smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_long_scoreboard_per_warp_active.ratio,smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct,smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.ratio,smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct,smsp__warp_issue_stalled_mio_throttle_per_warp_active.ratio,smsp__warps_active.avg.per_cycle_active,smsp__warps_eligible.avg.per_cycle_active,smsp__inst_executed.sum,smsp__cycles_elapsed.avg \
   --page raw \
-  ./build/learn_cuda bench \
+  ./build/indigo_star bench \
     --kernel cute-hgemm \
     --m 4096 --n 4096 --k 4096 \
     --warmup 5 --iters 1
@@ -132,7 +132,7 @@ no-reg 版本只换 kernel filter 和命令行 kernel：
   --launch-count 1 \
   --metrics gpu__time_duration.sum,launch__registers_per_thread,smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_short_scoreboard_per_warp_active.ratio,smsp__warp_issue_stalled_wait_per_warp_active.pct,smsp__warp_issue_stalled_wait_per_warp_active.ratio,smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_long_scoreboard_per_warp_active.ratio,smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct,smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.ratio,smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct,smsp__warp_issue_stalled_mio_throttle_per_warp_active.ratio,smsp__warps_active.avg.per_cycle_active,smsp__warps_eligible.avg.per_cycle_active,smsp__inst_executed.sum,smsp__cycles_elapsed.avg \
   --page raw \
-  ./build/learn_cuda bench \
+  ./build/indigo_star bench \
     --kernel cute-hgemm-noreg \
     --m 4096 --n 4096 --k 4096 \
     --warmup 5 --iters 1
@@ -177,7 +177,7 @@ no-reg 版本只换 kernel filter 和命令行 kernel：
   --launch-count 1 \
   --page source \
   --print-source cuda,sass \
-  ./build/learn_cuda bench \
+  ./build/indigo_star bench \
     --kernel cute-hgemm \
     --m 4096 --n 4096 --k 4096 \
     --warmup 5 --iters 1 \
@@ -196,7 +196,7 @@ no-reg 版本：
   --launch-count 1 \
   --page source \
   --print-source cuda,sass \
-  ./build/learn_cuda bench \
+  ./build/indigo_star bench \
     --kernel cute-hgemm-noreg \
     --m 4096 --n 4096 --k 4096 \
     --warmup 5 --iters 1 \

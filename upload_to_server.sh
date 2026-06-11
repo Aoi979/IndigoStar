@@ -4,9 +4,9 @@ set -euo pipefail
 # Read connection defaults from environment so that host/port/remote_dir are not
 # hard-coded in the repository. Set these variables in your shell or in a
 # separate, untracked .env file before running the script.
-default_host="${LEARNCUDA_UPLOAD_HOST:-}"
-default_port="${LEARNCUDA_UPLOAD_PORT:-}"
-default_remote_dir="${LEARNCUDA_UPLOAD_REMOTE_DIR:-}"
+default_host="${INDIGO_STAR_UPLOAD_HOST:-}"
+default_port="${INDIGO_STAR_UPLOAD_PORT:-}"
+default_remote_dir="${INDIGO_STAR_UPLOAD_REMOTE_DIR:-}"
 
 usage() {
   cat <<USAGE
@@ -14,20 +14,20 @@ Usage:
   ./upload_to_server.sh [options] [remote_dir]
 
 Environment defaults (all optional if provided via options):
-  LEARNCUDA_UPLOAD_HOST        SSH host, e.g. user@example.com
-  LEARNCUDA_UPLOAD_PORT        SSH/scp port, e.g. 22
-  LEARNCUDA_UPLOAD_REMOTE_DIR  Remote directory, e.g. /path/to/remote/dir
+  INDIGO_STAR_UPLOAD_HOST        SSH host, e.g. user@example.com
+  INDIGO_STAR_UPLOAD_PORT        SSH/scp port, e.g. 22
+  INDIGO_STAR_UPLOAD_REMOTE_DIR  Remote directory, e.g. /path/to/remote/dir
 
 Options:
-      --host HOST        SSH host, overrides LEARNCUDA_UPLOAD_HOST
-  -p, --port PORT        SSH/scp port, overrides LEARNCUDA_UPLOAD_PORT
+      --host HOST        SSH host, overrides INDIGO_STAR_UPLOAD_HOST
+  -p, --port PORT        SSH/scp port, overrides INDIGO_STAR_UPLOAD_PORT
   -n, --dry-run          Show commands without uploading.
   -h, --help             Show this help.
 
 Examples:
-  LEARNCUDA_UPLOAD_HOST=user@example.com \
-  LEARNCUDA_UPLOAD_PORT=22 \
-  LEARNCUDA_UPLOAD_REMOTE_DIR=/path/to/remote/dir \
+  INDIGO_STAR_UPLOAD_HOST=user@example.com \
+  INDIGO_STAR_UPLOAD_PORT=22 \
+  INDIGO_STAR_UPLOAD_REMOTE_DIR=/path/to/remote/dir \
     ./upload_to_server.sh
 
   ./upload_to_server.sh --host user@example.com --port 22 /path/to/remote/dir
@@ -87,19 +87,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$host" ]]; then
-  echo "Error: host is not set. Use --host or set LEARNCUDA_UPLOAD_HOST." >&2
+  echo "Error: host is not set. Use --host or set INDIGO_STAR_UPLOAD_HOST." >&2
   usage >&2
   exit 2
 fi
 
 if [[ -z "$port" ]]; then
-  echo "Error: port is not set. Use -p/--port or set LEARNCUDA_UPLOAD_PORT." >&2
+  echo "Error: port is not set. Use -p/--port or set INDIGO_STAR_UPLOAD_PORT." >&2
   usage >&2
   exit 2
 fi
 
 if [[ -z "$remote_dir" ]]; then
-  echo "Error: remote_dir is not set. Pass it as an argument or set LEARNCUDA_UPLOAD_REMOTE_DIR." >&2
+  echo "Error: remote_dir is not set. Pass it as an argument or set INDIGO_STAR_UPLOAD_REMOTE_DIR." >&2
   usage >&2
   exit 2
 fi
@@ -112,8 +112,8 @@ for tool in tar scp ssh; do
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-archive_name="learncuda-$(date +%Y%m%d-%H%M%S).tar.gz"
-archive_path="$(mktemp -t learncuda-upload.XXXXXX.tar.gz)"
+archive_name="indigostar-$(date +%Y%m%d-%H%M%S).tar.gz"
+archive_path="$(mktemp -t indigostar-upload.XXXXXX.tar.gz)"
 remote_archive="/tmp/${archive_name}"
 
 tar_excludes=(

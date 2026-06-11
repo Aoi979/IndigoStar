@@ -1,4 +1,4 @@
-# LearnCUDA 使用文档
+# Indigo Star 使用文档
 
 CUDA GEMM 手写 kernel 学习与 benchmark 项目，支持 SGEMM（FP32）和 HGEMM（FP16）两种精度，覆盖从 naive 到 Hopper 的多级优化实现。
 
@@ -22,7 +22,7 @@ Detected GPU compute capability: 89
 Machine:    RTX 4060 (Ada, SM89)
 CMake arch: 89
 ...
-Build complete: .../build/learn_cuda
+Build complete: .../build/indigo_star
 ```
 
 | 机器 | 检测值 | CMake 架构 | 编译范围 |
@@ -78,7 +78,7 @@ cmake .. -DCMAKE_CUDA_ARCHITECTURES=80
 cmake --build .
 ```
 
-可执行文件位于 `build/learn_cuda`。
+可执行文件位于 `build/indigo_star`。
 
 如果在不同 GPU 上切换测试，建议重新指定 CUDA 架构，避免用错 SASS：
 
@@ -108,13 +108,13 @@ cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=90a
 
 ```bash
 # 只传手写算子，自动补上 sgemm_cublas
-./learn_cuda bench --kernel sgemm-custom --kernel sgemm-naive --size 1024
+./indigo_star bench --kernel sgemm-custom --kernel sgemm-naive --size 1024
 
 # 同时测 SGEMM + HGEMM，自动补上 sgemm_cublas + hgemm_cublas_fp16acc
-./learn_cuda bench --kernel sgemm-custom --kernel hgemm-cute --size 1024
+./indigo_star bench --kernel sgemm-custom --kernel hgemm-cute --size 1024
 
 # 旧式 legacy flags（向后兼容）
-./learn_cuda bench --naive --cublas --size 1024
+./indigo_star bench --naive --cublas --size 1024
 ```
 
 输出示例：
@@ -138,7 +138,7 @@ sgemm_cublas   1.00x
 只跑一次 kernel，把结果拷贝回 Host，和 CPU 端双精度参考结果逐元素对比。
 
 ```bash
-./learn_cuda --kernel sgemm-custom --size 256 --verify
+./indigo_star --kernel sgemm-custom --size 256 --verify
 ```
 
 输出示例：
@@ -150,7 +150,7 @@ verify max_abs_error=5.9604645e-08 max_rel_error=5.9604645e-08
 
 > 也可以一次验证多个 kernel：
 > ```bash
-> ./learn_cuda --kernel sgemm-custom --kernel sgemm-naive --size 256 --verify
+> ./indigo_star --kernel sgemm-custom --kernel sgemm-naive --size 256 --verify
 > ```
 
 ### 3. 纯跑一次（不 Benchmark、不 Verify）
@@ -158,7 +158,7 @@ verify max_abs_error=5.9604645e-08 max_rel_error=5.9604645e-08
 仅执行一次 kernel，输出 `C[0]` 和 checksum。
 
 ```bash
-./learn_cuda --kernel sgemm-external-nodb --size 256
+./indigo_star --kernel sgemm-external-nodb --size 256
 ```
 
 > 不指定 `--kernel` 时，默认跑 `sgemm-custom`。
