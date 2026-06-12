@@ -46,7 +46,7 @@ inline cudaError_t launch_hgemm_128x128_nn(const cute::half_t *A,
       Layout<Shape<_16, _8>, Stride<_1, _16>>{},
       Layout<Shape<_8, _1>>{});
 
-  TiledMMA mmaC = make_tiled_mma(SM80_16x8x16_F16F16F16F16_TN{},
+  TiledMMA mmaC = make_tiled_mma(SM80_16x8x16_F32F16F16F32_TN{},
                                  Layout<Shape<_2, _2>>{},
                                  Tile<_32, _32, _16>{});
 
