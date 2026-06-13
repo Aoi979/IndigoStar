@@ -250,7 +250,7 @@ bool launch_sm80_hgemm_handwritten(const Options &options, cute::half_t *A,
   auto *half_A = reinterpret_cast<half *>(A);
   auto *half_B = reinterpret_cast<half *>(B);
   auto *half_C = reinterpret_cast<half *>(C);
-  cudaError_t err = sm80_hgemm::launch_hgemm_128x128x64(
+  cudaError_t err = sm80_hgemm::launch_hgemm_128x128x64_fp16acc(
       half_A, half_B, half_C, options.m, options.n, options.k);
   if (err != cudaSuccess) {
     std::cerr << "hgemm-sm80-handwritten launch failed: "
